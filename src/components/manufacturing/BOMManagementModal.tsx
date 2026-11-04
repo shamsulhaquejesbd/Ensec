@@ -626,7 +626,7 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {items.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                      <tr key={`bom-item-${item.materialId || 'item'}-${idx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                         <td className="p-2.5">
                           <select
                             value={item.materialId}
@@ -634,10 +634,15 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
                             className="w-full p-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs"
                           >
                             {rawMaterials.map((rm, rmIdx) => (
-                              <option key={`${rm.id}-${rmIdx}`} value={rm.id}>
+                              <option key={`rm-opt-${rm.id || rmIdx}-${rmIdx}`} value={rm.id}>
                                 {rm.name} ({rm.code})
                               </option>
                             ))}
+                            {!rawMaterials.some(m => String(m.id) === String(item.materialId)) && item.materialId && (
+                              <option key={`rm-fallback-${item.materialId}`} value={item.materialId}>
+                                {item.materialId}
+                              </option>
+                            )}
                           </select>
                         </td>
 
@@ -753,9 +758,9 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
               </div>
             ) : (
               <div className="space-y-2">
-                {existingBOM.revisions.map((rev) => (
+                {existingBOM.revisions.map((rev, revIdx) => (
                   <div 
-                    key={rev.id}
+                    key={rev.id || `bom-rev-${rev.version || 'v'}-${rev.revisionDate || rev.effectiveDate || revIdx}-${revIdx}`}
                     className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5"
                   >
                     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1054,7 +1059,7 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                         {draftRows.map((row, idx) => (
-                          <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                          <tr key={row.id || `draft-row-${row.code || idx}-${idx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                             <td className="p-2">
                               {row.isMatched ? (
                                 <div>
@@ -1091,7 +1096,7 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
                                   >
                                     <option value="">-- Match with Existing Material --</option>
                                     {rawMaterials.map((rm, rmIdx) => (
-                                      <option key={`${rm.id}-${rmIdx}`} value={rm.id}>
+                                      <option key={`draft-rm-${rm.id || rmIdx}-${rmIdx}`} value={rm.id}>
                                         {rm.name} ({rm.code})
                                       </option>
                                     ))}

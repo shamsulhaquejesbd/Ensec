@@ -6883,6 +6883,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateBOMDefinition = async (bom: BOMDefinition): Promise<{ success: boolean; error?: string }> => {
     const revisionDate = bom.effectiveDate || new Date().toISOString().substring(0, 10);
     const newRevision: BOMRevision = {
+      id: `rev-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       version: bom.version,
       revisionDate,
       effectiveDate: revisionDate,
