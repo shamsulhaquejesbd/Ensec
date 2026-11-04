@@ -5,7 +5,7 @@ import {
   Clock, ShieldCheck, X, Plus, Trash2, Search, Filter
 } from 'lucide-react';
 import { BatchBarcodeScannerModal } from '../inventory/BatchBarcodeScannerModal';
-import { ProductionOrder, InventoryBatch } from '../../types/erp';
+import { ProductionOrder, InventoryBatch, RawMaterial } from '../../types/erp';
 
 interface MaterialIssueModalProps {
   order: ProductionOrder;
@@ -46,30 +46,85 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   const [rowToDeleteId, setRowToDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const [allowInsufficientStock, setAllowInsufficientStock] = useState<boolean>(true);
 
   // Derive the Production Order's official batch number (e.g. KUS-B2610-25 or PR-KUS-2026-325)
   const poBatchNumber = order.batchNumber?.trim() || `KUS-B2610-${order.orderNumber?.replace(/\D/g, '').slice(-2) || '25'}`;
 
+  // Helper to reliably find a raw material across id, code, or name matching
+  const findRawMaterial = (materialId: string | undefined): RawMaterial | undefined => {
+    if (!materialId) return undefined;
+    const target = String(materialId).trim().toLowerCase();
+    const targetClean = target.replace(/[^a-z0-9]/gi, '');
+    return rawMaterials.find(m => {
+      if (!m) return false;
+      if (String(m.id).trim().toLowerCase() === target) return true;
+      if (m.code && m.code.trim().toLowerCase() === target) return true;
+      if (m.code && m.code.replace(/[^a-z0-9]/gi, '').toLowerCase() === targetClean) return true;
+      if (m.name && m.name.trim().toLowerCase() === target) return true;
+      return false;
+    });
+  };
+
+  // Helper to extract true available warehouse stock from a material record
+  const getMaterialStock = (rm: RawMaterial | undefined): number => {
+    if (!rm) return 0;
+    const candidates = [
+      rm.stockKushtia,
+      rm.stock_kushtia,
+      rm.totalAvailableStock,
+      rm.total_available_stock,
+      rm.stock,
+      rm.stock_qty,
+      rm.current_stock,
+      rm.available_qty,
+      rm.qty,
+      rm.quantity
+    ];
+    for (const c of candidates) {
+      if (c !== undefined && c !== null && !isNaN(Number(c))) {
+        const val = Number(c);
+        if (val >= 0) return val;
+      }
+    }
+    return 0;
+  };
+
   // Helper to retrieve all eligible batches for a raw material, with the PO batch as the primary default
   const getBatchOptionsForMaterial = (materialId: string, requiredQty: number = 0) => {
-    const rm = rawMaterials.find(
-      m => String(m.id) === String(materialId) || m.code === materialId
-    );
-    const existingBatches = inventoryBatches.filter(
-      b => (String(b.materialId) === String(materialId) || b.materialCode === materialId) && b.availableQty > 0
-    );
+    const rm = findRawMaterial(materialId);
+    const existingBatches = inventoryBatches.filter(b => {
+      if (!b) return false;
+      const bMatId = String(b.materialId || '').trim().toLowerCase();
+      const bMatCode = String(b.materialCode || '').trim().toLowerCase();
+      const targetId = String(materialId).trim().toLowerCase();
+      const targetClean = targetId.replace(/[^a-z0-9]/gi, '');
+      const rmCode = rm?.code?.trim().toLowerCase() || '';
+      const rmCodeClean = rmCode.replace(/[^a-z0-9]/gi, '');
+      const rmId = String(rm?.id || '').trim().toLowerCase();
+      return (
+        bMatId === targetId ||
+        bMatCode === targetId ||
+        (bMatCode && bMatCode.replace(/[^a-z0-9]/gi, '') === targetClean) ||
+        (rmCode && bMatCode === rmCode) ||
+        (rmCodeClean && bMatCode.replace(/[^a-z0-9]/gi, '') === rmCodeClean) ||
+        (rmId && bMatId === rmId)
+      ) && (Number(b.availableQty) > 0 || b.status === 'Active');
+    });
 
     const poBatchId = `batch-${order.orderNumber || 'PO'}-${materialId}`;
-    const stockQty = rm?.stockKushtia ?? 0;
-    // Provide real factory stock if available, or at least the required quantity so production issue is not blocked
-    const poAvail = stockQty > 0 ? stockQty : Math.max(requiredQty, 500);
+    const realFactoryStock = getMaterialStock(rm);
+    const totalBatchesStock = existingBatches.reduce((acc, b) => acc + (Number(b.availableQty) || 0), 0);
+
+    // Accurate available stock: reflects true warehouse inventory or active batch stock (no hardcoded 500)
+    const actualAvailable = realFactoryStock > 0 ? realFactoryStock : totalBatchesStock;
     const poUnitRate = rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || 0;
 
     const poBatch: InventoryBatch = {
       id: poBatchId,
       batchNumber: poBatchNumber,
       batchBarcode: `BC-${order.orderNumber?.replace(/\D/g, '') || '2026'}-${materialId}`,
-      materialId: String(materialId),
+      materialId: String(rm?.id || materialId),
       materialCode: rm?.code || 'RM',
       materialName: rm?.name || 'Raw Material',
       unit: rm?.unit || 'PCS',
@@ -77,25 +132,27 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
       supplierName: 'Kushtia Factory Store',
       purchaseDate: order.date || order.manufacturingDate || new Date().toISOString().substring(0, 10),
       unitPurchaseRate: poUnitRate,
-      receivedQty: poAvail,
+      receivedQty: actualAvailable,
       issuedQty: 0,
-      availableQty: poAvail,
+      availableQty: actualAvailable,
       warehouseId: 'WH-KUSHTIA',
       warehouseName: 'Kushtia Assembly Plant',
-      status: 'Active',
+      status: actualAvailable > 0 ? 'Active' : 'Depleted',
     };
 
     // PO batch is the primary default option according to Production Orders number
     const allBatches: InventoryBatch[] = [poBatch];
     existingBatches.forEach(b => {
-      if (b.batchNumber !== poBatchNumber) {
+      if (b.batchNumber !== poBatchNumber && b.id !== poBatchId) {
         allBatches.push(b);
       }
     });
 
     return {
       allBatches,
-      defaultBatch: poBatch
+      defaultBatch: poBatch,
+      actualAvailable,
+      rm
     };
   };
 
@@ -107,8 +164,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
     if (product && product.bom && product.bom.length > 0) {
       product.bom.forEach((bomItem, idx) => {
         const requiredQty = bomItem.requiredQty * (order.plannedQty || 1);
-        const { defaultBatch } = getBatchOptionsForMaterial(bomItem.materialId, requiredQty);
-        const rm = rawMaterials.find(m => String(m.id) === String(bomItem.materialId) || m.code === bomItem.materialId);
+        const { defaultBatch, actualAvailable, rm } = getBatchOptionsForMaterial(bomItem.materialId, requiredQty);
         const unitCost = bomItem.unitCostBDT || rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || defaultBatch.unitPurchaseRate;
 
         initialRows.push({
@@ -119,7 +175,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
           unitCost,
           isOverride: false,
           overrideReason: '',
-          maxAvailable: defaultBatch.availableQty,
+          maxAvailable: actualAvailable,
           suggestedFifoBatchId: defaultBatch.id
         });
       });
@@ -128,7 +184,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
     if (initialRows.length === 0) {
       // Provide an empty row
       const firstMat = rawMaterials[0];
-      const { defaultBatch } = getBatchOptionsForMaterial(firstMat ? String(firstMat.id) : '', 1);
+      const { defaultBatch, actualAvailable } = getBatchOptionsForMaterial(firstMat ? String(firstMat.id) : '', 1);
       initialRows.push({
         id: `row-0-${Date.now()}`,
         materialId: firstMat ? String(firstMat.id) : '',
@@ -137,7 +193,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
         unitCost: firstMat?.lastPurchaseUnitCostBDT || firstMat?.standardCostBDT || 0,
         isOverride: false,
         overrideReason: '',
-        maxAvailable: defaultBatch.availableQty,
+        maxAvailable: actualAvailable,
         suggestedFifoBatchId: defaultBatch.id
       });
     }
@@ -149,8 +205,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   const handleMaterialChange = (rowId: string, newMaterialId: string) => {
     const currentRow = issueRows.find(r => r.id === rowId);
     const qty = currentRow?.quantity || 1;
-    const { defaultBatch } = getBatchOptionsForMaterial(newMaterialId, qty);
-    const rm = rawMaterials.find(m => String(m.id) === String(newMaterialId) || m.code === newMaterialId);
+    const { defaultBatch, actualAvailable, rm } = getBatchOptionsForMaterial(newMaterialId, qty);
 
     setIssueRows(prev => prev.map(row => {
       if (row.id !== rowId) return row;
@@ -159,7 +214,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
         materialId: newMaterialId,
         batchId: defaultBatch.id, // Default to PO Batch
         unitCost: rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || defaultBatch.unitPurchaseRate,
-        maxAvailable: defaultBatch.availableQty,
+        maxAvailable: actualAvailable,
         suggestedFifoBatchId: defaultBatch.id,
         isOverride: false,
         overrideReason: ''
@@ -171,17 +226,18 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   const handleBatchChange = (rowId: string, newBatchId: string) => {
     const currentRow = issueRows.find(r => r.id === rowId);
     if (!currentRow) return;
-    const { allBatches, defaultBatch } = getBatchOptionsForMaterial(currentRow.materialId, currentRow.quantity);
+    const { allBatches, defaultBatch, actualAvailable } = getBatchOptionsForMaterial(currentRow.materialId, currentRow.quantity);
     const selectedBatch = allBatches.find(b => b.id === newBatchId) || inventoryBatches.find(b => b.id === newBatchId);
     const isOverride = newBatchId !== defaultBatch.id;
 
     setIssueRows(prev => prev.map(row => {
       if (row.id !== rowId) return row;
+      const avail = selectedBatch ? Number(selectedBatch.availableQty) : actualAvailable;
       return {
         ...row,
         batchId: newBatchId,
         unitCost: selectedBatch ? selectedBatch.unitPurchaseRate : row.unitCost,
-        maxAvailable: selectedBatch ? selectedBatch.availableQty : row.maxAvailable,
+        maxAvailable: avail,
         isOverride,
         overrideReason: isOverride ? row.overrideReason : ''
       };
@@ -191,19 +247,19 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   // Add extra row
   const handleAddRow = () => {
     const firstMat = rawMaterials[0];
-    const { defaultBatch } = getBatchOptionsForMaterial(firstMat ? String(firstMat.id) : '', 1);
+    const { defaultBatch, actualAvailable } = getBatchOptionsForMaterial(firstMat ? String(firstMat.id) : '', 1);
 
     setIssueRows(prev => [
       ...prev,
       {
-        id: `row-${Date.now()}`,
+        id: `row-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         materialId: firstMat ? String(firstMat.id) : '',
         batchId: defaultBatch.id,
         quantity: 1,
         unitCost: firstMat?.lastPurchaseUnitCostBDT || firstMat?.standardCostBDT || 0,
         isOverride: false,
         overrideReason: '',
-        maxAvailable: defaultBatch.availableQty,
+        maxAvailable: actualAvailable,
         suggestedFifoBatchId: defaultBatch.id
       }
     ]);
@@ -260,8 +316,9 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
         setErrorMsg(`Row ${i + 1}: Quantity must be greater than 0.`);
         return;
       }
-      if (row.quantity > row.maxAvailable) {
-        setErrorMsg(`Row ${i + 1}: Cannot issue ${row.quantity} units. Only ${row.maxAvailable} available in batch.`);
+      if (row.quantity > row.maxAvailable && !allowInsufficientStock && !row.isOverride) {
+        const mat = findRawMaterial(row.materialId);
+        setErrorMsg(`Row ${i + 1} (${mat?.name || row.materialId}): Issue quantity (${row.quantity}) exceeds available stock (${row.maxAvailable} ${mat?.unit || 'units'}). Check "Authorize issue if recorded stock is zero or insufficient" or enter an override reason.`);
         return;
       }
       if (row.isOverride && !row.overrideReason.trim()) {
@@ -277,7 +334,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
         warehouseId: 'WH-KUSHTIA',
         warehouseName: 'Kushtia Assembly Plant',
         issuedBy,
-        notes,
+        notes: `${notes}${issueRows.some(r => r.quantity > r.maxAvailable) ? ' [Physical issue with pending GRN reconciliation]' : ''}`,
         items: issueRows.map(r => {
           const { allBatches, defaultBatch } = getBatchOptionsForMaterial(r.materialId, r.quantity);
           const batch = allBatches.find(b => b.id === r.batchId) || inventoryBatches.find(b => b.id === r.batchId) || defaultBatch;
@@ -300,13 +357,13 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
 
   const availableCategories = ['All', ...Array.from(new Set(
     issueRows.map(r => {
-      const rm = rawMaterials.find(m => String(m.id) === String(r.materialId) || m.code === r.materialId);
+      const rm = findRawMaterial(r.materialId);
       return rm?.category || 'General';
     })
   )).filter(Boolean)];
 
   const filteredRows = issueRows.filter(row => {
-    const rm = rawMaterials.find(m => String(m.id) === String(row.materialId) || m.code === row.materialId);
+    const rm = findRawMaterial(row.materialId);
     const rowCategory = rm?.category || 'General';
     if (categoryFilter !== 'All' && rowCategory !== categoryFilter) return false;
 
@@ -466,7 +523,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
                   filteredRows.map((row) => {
                     const originalIdx = issueRows.findIndex(r => r.id === row.id) + 1;
                     const { allBatches, defaultBatch } = getBatchOptionsForMaterial(row.materialId, row.quantity);
-                    const rm = rawMaterials.find(m => String(m.id) === String(row.materialId) || m.code === row.materialId);
+                    const rm = findRawMaterial(row.materialId);
                     const isDefaultBatch = !row.batchId || row.batchId === defaultBatch.id;
 
                     return (
@@ -521,7 +578,9 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
                             >
                               {allBatches.map(b => (
                                 <option key={b.id} value={b.id}>
-                                  {b.batchNumber} {b.batchNumber === poBatchNumber ? `(PO: ${order.orderNumber} • Batch Stock: ${b.availableQty.toLocaleString()})` : `(Avail: ${b.availableQty} | Rate: ${formatCurrency(b.unitPurchaseRate)})`}
+                                  {b.batchNumber} {b.batchNumber === poBatchNumber 
+                                    ? `(PO Default • Stock: ${b.availableQty.toLocaleString()} ${rm?.unit || ''})` 
+                                    : `(Lot: ${b.batchNumber} • Avail: ${b.availableQty.toLocaleString()} | Rate: ${formatCurrency(b.unitPurchaseRate)})`}
                                 </option>
                               ))}
                             </select>
@@ -542,17 +601,32 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
                         </td>
 
                         {/* Available Qty */}
-                        <td className="p-3 text-right font-mono font-bold text-slate-700 dark:text-slate-300">
-                          <div>{row.maxAvailable.toLocaleString()}</div>
+                        <td className="p-3 text-right font-mono">
+                          <div className={`font-bold text-sm ${
+                            row.maxAvailable === 0
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : row.maxAvailable < row.quantity
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-slate-800 dark:text-slate-200'
+                          }`}>
+                            {row.maxAvailable.toLocaleString()}
+                          </div>
                           <div className="text-[10px] font-normal text-slate-400">{rm?.unit || 'Units'}</div>
+                          {row.maxAvailable < row.quantity && (
+                            <div className={`text-[9px] font-bold uppercase tracking-tight ${
+                              row.maxAvailable === 0 ? 'text-rose-500' : 'text-amber-500'
+                            }`}>
+                              {row.maxAvailable === 0 ? 'Out of Stock' : 'Low Stock'}
+                            </div>
+                          )}
                         </td>
 
                         {/* Quantity */}
                         <td className="p-3 text-right">
                           <input
                             type="number"
-                            min="1"
-                            max={row.maxAvailable}
+                            min="0.001"
+                            step="any"
                             value={row.quantity}
                             onChange={(e) => {
                               const val = Math.max(0, Number(e.target.value));
@@ -560,7 +634,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
                             }}
                             className={`w-24 p-2 text-right rounded-lg border font-mono font-bold text-xs shadow-xs ${
                               row.quantity > row.maxAvailable
-                                ? 'border-red-500 bg-red-50 text-red-700'
+                                ? 'border-amber-500 bg-amber-50/60 dark:bg-amber-950/20 text-amber-800 dark:text-amber-300'
                                 : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white'
                             }`}
                           />
@@ -690,6 +764,22 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
                 Calculated according to batch purchase acquisition costs.
               </p>
             </div>
+
+            {issueRows.some(r => r.quantity > r.maxAvailable) && (
+              <div className="pt-2">
+                <label className="flex items-start gap-2 cursor-pointer select-none text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50">
+                  <input
+                    type="checkbox"
+                    checked={allowInsufficientStock}
+                    onChange={(e) => setAllowInsufficientStock(e.target.checked)}
+                    className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <span>
+                    <b>Authorize Factory Issue with Shortfall:</b> Recorded warehouse stock is insufficient for one or more items. Issue will proceed physically for assembly and record stock variance.
+                  </span>
+                </label>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-2.5 pt-3">
               <button
