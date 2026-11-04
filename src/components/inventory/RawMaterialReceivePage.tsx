@@ -21,11 +21,16 @@ import {
   Layers,
   ArrowRight,
   Eye,
+  FileSpreadsheet,
+  UploadCloud,
+  Download,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useERP } from '../../context/ERPContext.tsx';
 import { RawMaterialReceipt, RawMaterialReceiptItem, InventoryBatch } from '../../types/erp.ts';
 import { BarcodeDisplay } from './BarcodeDisplay.tsx';
 import { BatchBarcodeScannerModal } from './BatchBarcodeScannerModal.tsx';
+import { BulkGRNUploadModal } from './BulkGRNUploadModal.tsx';
 
 interface RawMaterialReceivePageProps {
   onNavigate?: (module: string) => void;
@@ -57,6 +62,79 @@ export const RawMaterialReceivePage: React.FC<RawMaterialReceivePageProps> = ({ 
 
   const [activeTab, setActiveTab] = useState<'create' | 'register'>('create');
   const [showScannerModal, setShowScannerModal] = useState(false);
+  const [showBulkUploadModal, setShowBulkUploadModal] = useState(false);
+
+  // Active raw materials from Master Registry
+  const activeRawMaterials = useMemo(
+    () => rawMaterials.filter((m) => m.status !== 'Inactive'),
+    [rawMaterials]
+  );
+
+  // Generate and download dynamic Sample Excel Template populated with all active materials from database
+  const handleDownloadSampleExcelTemplate = () => {
+    const now = new Date();
+    const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const dateStr = now.toISOString().slice(0, 10);
+
+    const data = activeRawMaterials.map((mat, idx) => {
+      const seq = String(idx + 1).padStart(3, '0');
+      const rate = Number(mat.lastPurchaseUnitCostBDT || mat.standardCostBDT || 0);
+      const stock = Number(mat.stockKushtia ?? mat.totalAvailableStock ?? 0);
+
+      return {
+        'Material Code': mat.code || '',
+        'Material Name': mat.name || '',
+        'Category': mat.category || 'General',
+        'Unit of Measure (UOM)': mat.unit || 'Pieces',
+        'Current Warehouse Stock': stock,
+        'Ordered Quantity': 0,
+        'Receive Quantity (ENTER QTY)': 0,
+        'Unit Purchase Rate (BDT)': rate,
+        'Discount (BDT)': 0,
+        'Additional Costs (BDT)': 0,
+        'Batch Number': `RM-BATCH-${yearMonth}-${seq}`,
+        'Batch Barcode': `BC-BATCH-${yearMonth.slice(2)}-${seq}`,
+        'Remarks / Inspection Notes': 'Grade A inspected upon inward gate receipt.',
+        'Material ID (System ID)': mat.id,
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(data);
+
+    worksheet['!cols'] = [
+      { wch: 16 }, // Material Code
+      { wch: 38 }, // Material Name
+      { wch: 18 }, // Category
+      { wch: 14 }, // UOM
+      { wch: 22 }, // Current Stock
+      { wch: 18 }, // Ordered Qty
+      { wch: 30 }, // Receive Quantity (ENTER QTY)
+      { wch: 24 }, // Unit Purchase Rate (BDT)
+      { wch: 15 }, // Discount (BDT)
+      { wch: 20 }, // Additional Costs (BDT)
+      { wch: 24 }, // Batch Number
+      { wch: 22 }, // Batch Barcode
+      { wch: 36 }, // Remarks
+      { wch: 20 }, // Material ID
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Active Raw Materials GRN');
+    XLSX.writeFile(workbook, `Ensec_Active_Raw_Materials_GRN_Template_${dateStr}.xlsx`);
+  };
+
+  // Handle items applied from Bulk GRN Upload modal
+  const handleApplyBulkUploadItems = (newItems: NewReceiptRow[], mode: 'replace' | 'append') => {
+    if (mode === 'replace') {
+      setItems(newItems);
+    } else {
+      setItems((prev) => [...prev, ...newItems]);
+    }
+    setFeedback({
+      type: 'success',
+      message: `Successfully loaded ${newItems.length} consignment item${newItems.length === 1 ? '' : 's'} from Excel upload into the GRN receipt table. Review details and click Confirm Receipt to post to inventory.`,
+    });
+  };
 
   // Form Header States
   const defaultWh = warehouses.find((w) => w.id === 'wh-kushtia' || w.name.includes('Kushtia')) || warehouses[0];
@@ -559,22 +637,50 @@ export const RawMaterialReceivePage: React.FC<RawMaterialReceivePageProps> = ({ 
 
           {/* Multi-Item Line Entry Table */}
           <div className="p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <Boxes className="w-4 h-4 text-amber-600" />
                 <h3 className="font-bold text-sm text-slate-900 dark:text-white">
                   Raw Material Consignment Items & Purchase Batches
                 </h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300">
+                  {items.length} {items.length === 1 ? 'Line Item' : 'Line Items'}
+                </span>
               </div>
-              <button
-                type="button"
-                onClick={handleAddItemRow}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800 transition-colors cursor-pointer"
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                <span>+ Add Raw Material Row</span>
-              </button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadSampleExcelTemplate}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer shadow-2xs"
+                  title="Download dynamic Excel template pre-filled with all active raw materials from database"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Download Sample Excel Template</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowBulkUploadModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/60 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-xs font-bold border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer shadow-2xs"
+                  title="Upload filled Excel / CSV consignment file"
+                >
+                  <UploadCloud className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Bulk GRN Upload</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleAddItemRow}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/60 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-300 text-xs font-bold border border-amber-200 dark:border-amber-800 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <PlusCircle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>+ Add Manual Row</span>
+                </button>
+              </div>
             </div>
+
+          
 
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left min-w-[900px]">
@@ -1078,6 +1184,14 @@ export const RawMaterialReceivePage: React.FC<RawMaterialReceivePageProps> = ({ 
       <BatchBarcodeScannerModal
         isOpen={showScannerModal}
         onClose={() => setShowScannerModal(false)}
+      />
+
+      {/* Bulk GRN Excel Consignment Upload Modal */}
+      <BulkGRNUploadModal
+        isOpen={showBulkUploadModal}
+        onClose={() => setShowBulkUploadModal(false)}
+        rawMaterials={rawMaterials}
+        onApplyItems={handleApplyBulkUploadItems}
       />
     </div>
   );
