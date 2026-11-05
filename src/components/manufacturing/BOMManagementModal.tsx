@@ -20,12 +20,40 @@ interface UploadDraftRow {
   code: string;
   name: string;
   matchedMaterialId: string;
-  requiredQty: number;
+  requiredQty: number | string;
   unit: string;
-  expectedWastagePercent: number;
+  expectedWastagePercent: number | string;
   notes: string;
   isMatched: boolean;
 }
+
+interface DraftBOMItem {
+  materialId: string;
+  requiredQty: number | string;
+  unit: string;
+  expectedWastagePercent: number | string;
+  notes?: string;
+}
+
+const extractItemWastage = (it: any): number => {
+  if (!it) return 0;
+  const candidates = [
+    it.expectedWastagePercent,
+    it.expected_wastage_percent,
+    it.wastagePercent,
+    it.wastage_percent,
+    it.wastage,
+    it.scrapPercent,
+    it.scrap_percent
+  ];
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && c !== '') {
+      const n = Number(c);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return 0;
+};
 
 export const BOMManagementModal: React.FC<BOMManagementModalProps> = ({
   product,
@@ -68,30 +96,28 @@ export const BOMManagementModal: React.FC<BOMManagementModalProps> = ({
     ? product.bom
     : null;
 
-  const [items, setItems] = useState<{
-    materialId: string;
-    requiredQty: number;
-    unit: string;
-    expectedWastagePercent: number;
-    notes?: string;
-  }[]>(
-    initialItemsList?.map(it => ({
-      materialId: it.materialId,
-      requiredQty: it.requiredQty,
-      unit: it.unit,
-      expectedWastagePercent: it.expectedWastagePercent || 0.5,
-      notes: it.notes || ''
-    })) || [
+  const [items, setItems] = useState<DraftBOMItem[]>(() => {
+    if (initialItemsList && initialItemsList.length > 0) {
+      return initialItemsList.map((it: any) => ({
+        materialId: it.materialId || (rawMaterials[0]?.id || ''),
+        requiredQty: it.requiredQty !== undefined && it.requiredQty !== null ? it.requiredQty : 1,
+        unit: it.unit || 'PCS',
+        expectedWastagePercent: extractItemWastage(it),
+        notes: it.notes || ''
+      }));
+    }
+    return [
       {
         materialId: rawMaterials[0]?.id || '',
         requiredQty: 4,
         unit: 'PCS',
-        expectedWastagePercent: 0.5,
+        expectedWastagePercent: 0,
         notes: 'Primary cells'
       }
-    ]
-  );
+    ];
+  });
 
+  const [bulkWastageInput, setBulkWastageInput] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
   const [itemToDeleteIndex, setItemToDeleteIndex] = useState<number | null>(null);
 
@@ -108,6 +134,19 @@ export const BOMManagementModal: React.FC<BOMManagementModalProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportTargetVersion, setExportTargetVersion] = useState<string>('active');
+
+  const handleApplyBulkWastage = () => {
+    if (bulkWastageInput.trim() === '') return;
+    const num = parseFloat(bulkWastageInput.trim());
+    if (isNaN(num) || num < 0 || num > 100) {
+      setValidationError('Bulk wastage percentage must be a number between 0% and 100%.');
+      return;
+    }
+    const cleanVal = Math.round(num * 100) / 100;
+    setItems(prev => prev.map(it => ({ ...it, expectedWastagePercent: cleanVal })));
+    setSuccessToast(`Applied ${cleanVal}% wastage to all ${items.length} components.`);
+    setTimeout(() => setSuccessToast(null), 3500);
+  };
 
   const handleDownloadTemplate = () => {
     const headers = ['Material Code', 'Material Name', 'Required Qty', 'UOM', 'Wastage %', 'Notes'];
@@ -351,7 +390,7 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
         materialId: firstRM?.id || '',
         requiredQty: 1,
         unit: firstRM?.unit || 'PCS',
-        expectedWastagePercent: 0.5,
+        expectedWastagePercent: 0,
         notes: ''
       }
     ]);
@@ -388,22 +427,41 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
         setValidationError(`Row ${i + 1}: Select a raw material.`);
         return;
       }
-      if (items[i].requiredQty <= 0) {
+      const rawQty = items[i].requiredQty;
+      const numQty = typeof rawQty === 'number' ? rawQty : parseFloat(String(rawQty));
+      if (isNaN(numQty) || numQty <= 0) {
         setValidationError(`Row ${i + 1}: Required quantity must be greater than 0.`);
+        return;
+      }
+      const rawWastage = items[i].expectedWastagePercent;
+      const numWastage = typeof rawWastage === 'number' ? rawWastage : parseFloat(String(rawWastage));
+      if (isNaN(numWastage) || numWastage < 0 || numWastage > 100) {
+        setValidationError(`Row ${i + 1}: Wastage percentage must be between 0% and 100%.`);
         return;
       }
     }
 
     const bomItems: BOMItem[] = items.map(it => {
       const rm = rawMaterials.find(m => m.id === it.materialId || m.code === it.materialId);
+      const rawWastage = it.expectedWastagePercent;
+      const numWastage = typeof rawWastage === 'number' ? rawWastage : parseFloat(String(rawWastage));
+      const validWastage = isNaN(numWastage) ? 0 : Math.max(0, Math.min(100, Math.round(numWastage * 100) / 100));
+
+      const rawQty = it.requiredQty;
+      const numQty = typeof rawQty === 'number' ? rawQty : parseFloat(String(rawQty));
+      const validQty = isNaN(numQty) || numQty <= 0 ? 1 : Math.round(numQty * 10000) / 10000;
+
       return {
         materialId: it.materialId,
+        materialCode: rm?.code || it.materialId,
         materialName: rm?.name || 'Raw Material',
-        requiredQty: Number(it.requiredQty),
+        requiredQty: validQty,
         unit: it.unit,
         unitCostBDT: rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || 0,
-        expectedWastagePercent: Number(it.expectedWastagePercent),
-        notes: it.notes
+        expectedWastagePercent: validWastage,
+        expected_wastage_percent: validWastage,
+        wastagePercent: validWastage,
+        notes: it.notes || ''
       };
     });
 
@@ -592,6 +650,30 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
                   </span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  {/* Quick Bulk Wastage Setter */}
+                  <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/80 px-2.5 py-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">Set All Wastage %:</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={bulkWastageInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '' || /^\d*\.?\d*$/.test(val)) setBulkWastageInput(val);
+                      }}
+                      placeholder="0"
+                      className="w-12 p-1 text-right bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-xs font-mono font-bold focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleApplyBulkWastage}
+                      className="px-2 py-1 text-[11px] font-bold rounded-lg bg-blue-50 hover:bg-blue-600 hover:text-white dark:bg-blue-950/60 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800 transition cursor-pointer"
+                      title="Apply this wastage percentage to all component rows in BOM"
+                    >
+                      Apply to All
+                    </button>
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => setShowUploadModal(true)}
@@ -648,15 +730,27 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
 
                         <td className="p-2.5 text-right">
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
-                            value={item.requiredQty}
+                            type="text"
+                            inputMode="decimal"
+                            value={item.requiredQty === undefined ? '' : String(item.requiredQty)}
                             onChange={(e) => {
-                              const val = Math.max(0.01, Number(e.target.value));
-                              setItems(prev => prev.map((it, i) => i === idx ? { ...it, requiredQty: val } : it));
+                              const raw = e.target.value;
+                              if (raw === '' || /^\d*\.?\d*$/.test(raw)) {
+                                setItems(prev => prev.map((it, i) => i === idx ? { ...it, requiredQty: raw } : it));
+                              }
                             }}
-                            className="w-full p-1.5 text-right rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-xs"
+                            onBlur={(e) => {
+                              const raw = String(e.target.value).trim();
+                              if (raw === '' || raw === '.') {
+                                setItems(prev => prev.map((it, i) => i === idx ? { ...it, requiredQty: 1 } : it));
+                              } else {
+                                const num = parseFloat(raw);
+                                const cleanQty = isNaN(num) || num <= 0 ? 1 : Math.round(num * 10000) / 10000;
+                                setItems(prev => prev.map((it, i) => i === idx ? { ...it, requiredQty: cleanQty } : it));
+                              }
+                            }}
+                            placeholder="1"
+                            className="w-full p-1.5 text-right rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                           />
                         </td>
 
@@ -666,16 +760,27 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
 
                         <td className="p-2.5 text-right">
                           <input
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max="100"
-                            value={item.expectedWastagePercent}
+                            type="text"
+                            inputMode="decimal"
+                            value={item.expectedWastagePercent === undefined ? '' : String(item.expectedWastagePercent)}
                             onChange={(e) => {
-                              const val = Math.max(0, Number(e.target.value));
-                              setItems(prev => prev.map((it, i) => i === idx ? { ...it, expectedWastagePercent: val } : it));
+                              const raw = e.target.value;
+                              if (raw === '' || /^\d*\.?\d*$/.test(raw)) {
+                                setItems(prev => prev.map((it, i) => i === idx ? { ...it, expectedWastagePercent: raw } : it));
+                              }
                             }}
-                            className="w-full p-1.5 text-right rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono text-xs"
+                            onBlur={(e) => {
+                              const raw = String(e.target.value).trim();
+                              if (raw === '' || raw === '.') {
+                                setItems(prev => prev.map((it, i) => i === idx ? { ...it, expectedWastagePercent: 0 } : it));
+                              } else {
+                                const num = parseFloat(raw);
+                                const cleanVal = isNaN(num) ? 0 : Math.max(0, Math.min(100, Math.round(num * 100) / 100));
+                                setItems(prev => prev.map((it, i) => i === idx ? { ...it, expectedWastagePercent: cleanVal } : it));
+                              }
+                            }}
+                            placeholder="0"
+                            className="w-full p-1.5 text-right rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
                           />
                         </td>
 
@@ -1107,15 +1212,22 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
 
                             <td className="p-2 text-right">
                               <input
-                                type="number"
-                                step="0.01"
-                                min="0.01"
-                                value={row.requiredQty}
+                                type="text"
+                                inputMode="decimal"
+                                value={row.requiredQty === undefined ? '' : String(row.requiredQty)}
                                 onChange={(e) => {
-                                  const val = Math.max(0.01, Number(e.target.value));
-                                  setDraftRows(prev => prev.map((r, i) => i === idx ? { ...r, requiredQty: val } : r));
+                                  const raw = e.target.value;
+                                  if (raw === '' || /^\d*\.?\d*$/.test(raw)) {
+                                    setDraftRows(prev => prev.map((r, i) => i === idx ? { ...r, requiredQty: raw } : r));
+                                  }
                                 }}
-                                className="w-full p-1 text-right rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-xs"
+                                onBlur={(e) => {
+                                  const raw = String(e.target.value).trim();
+                                  const num = parseFloat(raw);
+                                  const cleanQty = isNaN(num) || num <= 0 ? 1 : Math.round(num * 10000) / 10000;
+                                  setDraftRows(prev => prev.map((r, i) => i === idx ? { ...r, requiredQty: cleanQty } : r));
+                                }}
+                                className="w-full p-1 text-right rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono font-bold text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                               />
                             </td>
 
@@ -1125,16 +1237,22 @@ RM-CAB-001,Silicone 8AWG Flexible High-Temp Wire Cable,3.5,MTR,1.0,Flame retarda
 
                             <td className="p-2 text-right">
                               <input
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max="100"
-                                value={row.expectedWastagePercent}
+                                type="text"
+                                inputMode="decimal"
+                                value={row.expectedWastagePercent === undefined ? '' : String(row.expectedWastagePercent)}
                                 onChange={(e) => {
-                                  const val = Math.max(0, Number(e.target.value));
-                                  setDraftRows(prev => prev.map((r, i) => i === idx ? { ...r, expectedWastagePercent: val } : r));
+                                  const raw = e.target.value;
+                                  if (raw === '' || /^\d*\.?\d*$/.test(raw)) {
+                                    setDraftRows(prev => prev.map((r, i) => i === idx ? { ...r, expectedWastagePercent: raw } : r));
+                                  }
                                 }}
-                                className="w-full p-1 text-right rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs"
+                                onBlur={(e) => {
+                                  const raw = String(e.target.value).trim();
+                                  const num = parseFloat(raw);
+                                  const cleanVal = isNaN(num) ? 0 : Math.max(0, Math.min(100, Math.round(num * 100) / 100));
+                                  setDraftRows(prev => prev.map((r, i) => i === idx ? { ...r, expectedWastagePercent: cleanVal } : r));
+                                }}
+                                className="w-full p-1 text-right rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
                               />
                             </td>
 

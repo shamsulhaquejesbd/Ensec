@@ -2698,7 +2698,24 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             unit: row.unit || 'Units',
             status: row.status || 'Active',
             categoryPrices: row.category_prices || {},
-            bom: Array.isArray(row.bom) ? row.bom : [],
+            bom: Array.isArray(row.bom)
+              ? row.bom.map((it: any) => {
+                  const w =
+                    it.expectedWastagePercent !== undefined && it.expectedWastagePercent !== null && it.expectedWastagePercent !== ''
+                      ? Number(it.expectedWastagePercent)
+                      : it.expected_wastage_percent !== undefined && it.expected_wastage_percent !== null && it.expected_wastage_percent !== ''
+                      ? Number(it.expected_wastage_percent)
+                      : it.wastagePercent !== undefined && it.wastagePercent !== null && it.wastagePercent !== ''
+                      ? Number(it.wastagePercent)
+                      : 0;
+                  return {
+                    ...it,
+                    expectedWastagePercent: isNaN(w) ? 0 : w,
+                    expected_wastage_percent: isNaN(w) ? 0 : w,
+                    wastagePercent: isNaN(w) ? 0 : w,
+                  };
+                })
+              : [],
           }));
           setProducts(mapped);
           if (typeof window !== 'undefined') {
@@ -5821,14 +5838,18 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateProductBOM = async (productId: string, bom: Product['bom']): Promise<{ success: boolean; error?: string }> => {
-    setProducts((prev) =>
-      prev.map((p) => {
+    setProducts((prev) => {
+      const updated = prev.map((p) => {
         if (p.id === productId) {
           return { ...p, bom };
         }
         return p;
-      })
-    );
+      });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('ensec_products', JSON.stringify(updated));
+      }
+      return updated;
+    });
     addAuditLog('BOM_UPDATED', 'Bill of Materials', `Updated BOM component specifications for product ID ${productId}`);
 
     const sb = getSupabase();
@@ -6903,8 +6924,10 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (b) =>
           b.id === bom.id ||
           b.productId === bom.productId ||
-          (b.productCode && bom.productCode && b.productCode === bom.productCode)
+          (b.productCode && bom.productCode && b.productCode === bom.productCode) ||
+          (b.productModel && bom.productModel && b.productModel === bom.productModel)
       );
+      let updated: BOMDefinition[];
       if (idx >= 0) {
         const existing = prev[idx];
         const existingHistory = existing.revisionHistory || existing.revisions || [];
@@ -6917,7 +6940,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         const copy = [...prev];
         copy[idx] = targetBOM;
-        return copy;
+        updated = copy;
       } else {
         targetBOM = {
           ...bom,
@@ -6926,13 +6949,17 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
-        return [targetBOM, ...prev];
+        updated = [targetBOM, ...prev];
       }
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('ensec_boms', JSON.stringify(updated));
+      }
+      return updated;
     });
 
     // Also update product's bom in state and localStorage
-    setProducts((prev) =>
-      prev.map((p) => {
+    setProducts((prev) => {
+      const updated = prev.map((p) => {
         if (
           p.id === bom.productId ||
           (bom.productCode && p.code === bom.productCode) ||
@@ -6941,8 +6968,12 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { ...p, bom: bom.items };
         }
         return p;
-      })
-    );
+      });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('ensec_products', JSON.stringify(updated));
+      }
+      return updated;
+    });
 
     addAuditLog('BOM_DEFINITION_SAVED', 'Bill of Materials', `Saved BOM version ${bom.version} for ${bom.productName}`);
 
@@ -7114,7 +7145,22 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const mapped: BOMDefinition[] = data.map((row: any) => {
           let items: BOMItem[] = [];
           if (Array.isArray(row.items) && row.items.length > 0) {
-            items = row.items;
+            items = row.items.map((it: any) => {
+              const w =
+                it.expectedWastagePercent !== undefined && it.expectedWastagePercent !== null && it.expectedWastagePercent !== ''
+                  ? Number(it.expectedWastagePercent)
+                  : it.expected_wastage_percent !== undefined && it.expected_wastage_percent !== null && it.expected_wastage_percent !== ''
+                  ? Number(it.expected_wastage_percent)
+                  : it.wastagePercent !== undefined && it.wastagePercent !== null && it.wastagePercent !== ''
+                  ? Number(it.wastagePercent)
+                  : 0;
+              return {
+                ...it,
+                expectedWastagePercent: isNaN(w) ? 0 : w,
+                expected_wastage_percent: isNaN(w) ? 0 : w,
+                wastagePercent: isNaN(w) ? 0 : w,
+              };
+            });
           } else if (lineItems.length > 0) {
             items = lineItems
               .filter((li: any) => Number(li.bom_id) === Number(row.id))
@@ -7125,6 +7171,8 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 unit: li.unit || 'Pieces',
                 unitCostBDT: Number(li.unit_cost_bdt) || 0,
                 expectedWastagePercent: Number(li.expected_wastage_percent) || 0,
+                expected_wastage_percent: Number(li.expected_wastage_percent) || 0,
+                wastagePercent: Number(li.expected_wastage_percent) || 0,
                 notes: li.notes || '',
               }));
           }
