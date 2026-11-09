@@ -655,14 +655,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-7 h-7 rounded-lg bg-blue-600/10 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold text-xs shrink-0">
-                {currentUser.name.charAt(0)}
+                {(currentUser?.name || 'User').charAt(0)}
               </div>
               <div className="min-w-0">
                 <div className="font-semibold text-xs text-slate-800 dark:text-slate-200 truncate">
-                  {currentUser.name}
+                  {currentUser?.name || 'Authorized User'}
                 </div>
                 <div className="text-[10px] text-purple-600 dark:text-purple-400 font-medium truncate">
-                  {currentUser.role === 'Super Admin' ? 'Super Admin' : currentUser.role}
+                  {currentUser?.role === 'Super Admin' ? 'Super Admin' : currentUser?.role || 'Staff'}
                 </div>
               </div>
             </div>

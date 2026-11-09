@@ -320,6 +320,7 @@ interface ERPContextType {
   inventoryMovements: InventoryMovement[];
   rawMaterialReceipts: RawMaterialReceipt[];
   materialIssues: MaterialIssue[];
+  refreshMaterialIssues?: () => Promise<void>;
   productionConsumptions: ProductionConsumption[];
   boms: BOMDefinition[];
   productionCosts: ProductionCostRecord[];
@@ -764,7 +765,6 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const SAMPLE_USER_IDS = new Set(['u-1', 'u-2', 'u-3', 'u-4', 'u-5', 'u-6', 'u-7', 'u-8', 'u-raju']);
     const SAMPLE_EMP_IDS = new Set(['EMP-001', 'EMP-002', 'EMP-003', 'EMP-004', 'EMP-005', 'EMP-006', 'EMP-007', 'EMP-008', 'EMP-010']);
     const SAMPLE_MOCK_EMAILS = new Set([
-      'sohidul@ensecbd.com',
       'tanvir.sales@ensecbd.com',
       'mustafiz.kushtia@ensecbd.com',
       'kamrul.accounts@ensecbd.com',
@@ -810,7 +810,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [currentUser, setCurrentUser] = useState<User>(() => {
     const savedUid = typeof window !== 'undefined' ? localStorage.getItem('ensec_erp_uid') : null;
-    const found = savedUid ? users.find((u) => u.id === savedUid) : null;
+    const found = savedUid ? users.find((u) => u.id === savedUid || u.userId === savedUid || u.email?.toLowerCase() === savedUid.toLowerCase()) : null;
     return found || users[0] || DEFAULT_ROOT_ADMIN;
   });
 
@@ -819,7 +819,11 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isAuth = localStorage.getItem('ensec_erp_auth') === 'true';
       const savedUid = localStorage.getItem('ensec_erp_uid');
       if (isAuth && savedUid) {
-        const found = users.some((u) => u.id === savedUid) || savedUid === DEFAULT_ROOT_ADMIN.id;
+        const found =
+          users.some((u) => u.id === savedUid || u.userId === savedUid || u.email?.toLowerCase() === savedUid.toLowerCase()) ||
+          savedUid === DEFAULT_ROOT_ADMIN.id ||
+          savedUid === 'shamsul' ||
+          savedUid === 'u-admin-root';
         if (found) return true;
         localStorage.removeItem('ensec_erp_auth');
         localStorage.removeItem('ensec_erp_uid');
@@ -832,7 +836,13 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (isAuthenticated && typeof window !== 'undefined') {
       const savedUid = localStorage.getItem('ensec_erp_uid');
-      const valid = users.some((u) => u.id === savedUid) || savedUid === DEFAULT_ROOT_ADMIN.id;
+      if (!savedUid) return;
+      const valid =
+        users.length === 0 ||
+        users.some((u) => u.id === savedUid || u.userId === savedUid || u.email?.toLowerCase() === savedUid.toLowerCase()) ||
+        savedUid === DEFAULT_ROOT_ADMIN.id ||
+        savedUid === 'shamsul' ||
+        savedUid === 'u-admin-root';
       if (!valid) {
         setIsAuthenticated(false);
         localStorage.removeItem('ensec_erp_auth');
@@ -3728,6 +3738,80 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const refreshMaterialIssues = async () => {
+    const sb = getSupabase();
+    if (!sb) return;
+
+    try {
+      const { data, error } = await sb
+        .from('material_issues')
+        .select('*')
+        .order('id', { ascending: false });
+
+      if (!error && Array.isArray(data) && data.length > 0) {
+        let lineItems: any[] = [];
+        try {
+          const { data: liData } = await sb.from('material_issue_items').select('*');
+          if (Array.isArray(liData)) lineItems = liData;
+        } catch {}
+
+        const mapped: MaterialIssue[] = data.map((row: any) => {
+          const items: MaterialIssueItem[] = lineItems
+            .filter((li: any) => Number(li.issue_id) === Number(row.id))
+            .map((li: any) => ({
+              id: String(li.id),
+              materialId: String(li.material_id),
+              materialCode: li.material_code || '',
+              materialName: li.material_name || '',
+              batchNumber: li.batch_number || '',
+              batchBarcode: li.batch_barcode || '',
+              unit: li.unit || 'Pieces',
+              requestedQty: Number(li.requested_qty) || 0,
+              issuedQty: Number(li.issued_qty) || 0,
+              unitCostBDT: Number(li.unit_cost_bdt) || 0,
+              totalMaterialCostBDT: Number(li.total_material_cost_bdt) || 0,
+              isFifoOverride: Boolean(li.is_fifo_override),
+              overrideReason: li.override_reason || '',
+            }));
+
+          return {
+            id: String(row.id),
+            issueNumber: row.issue_number || '',
+            productionOrderId: String(row.production_order_id),
+            productionOrderNumber: row.production_order_number || '',
+            issueDate: row.issue_date || new Date().toISOString().substring(0, 10),
+            warehouseId: String(row.warehouse_id),
+            warehouseName: row.warehouse_name || 'Kushtia Assembly Plant',
+            issuedBy: row.issued_by || 'Production Supervisor',
+            department: row.department || 'Manufacturing & Assembly',
+            status: (row.status as any) || 'Issued',
+            items,
+            totalIssuedQty: Number(row.total_issued_qty) || 0,
+            totalMaterialCostBDT: Number(row.total_material_cost_bdt) || 0,
+            notes: row.notes || '',
+            createdAt: row.created_at || new Date().toISOString(),
+          };
+        });
+
+        setMaterialIssues((prev) => {
+          const merged = [...mapped];
+          prev.forEach((p) => {
+            if (!merged.some((m) => m.issueNumber === p.issueNumber || m.id === p.id)) {
+              merged.push(p);
+            }
+          });
+          return merged;
+        });
+
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('ensec_material_issues', JSON.stringify(mapped));
+        }
+      }
+    } catch (err) {
+      console.warn('refreshMaterialIssues error:', err);
+    }
+  };
+
   const refreshAllBasicData = async () => {
     await Promise.allSettled([
       refreshUsers(),
@@ -3738,6 +3822,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       refreshRawMaterials(),
       refreshBOMs(),
       refreshProductionOrders(),
+      refreshMaterialIssues(),
       refreshRawMaterialCategories(),
       refreshRawMaterialClassifications(),
       refreshProductCategories(),
@@ -6160,29 +6245,281 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
+    let finalUpdatedRMCost = 0;
+    let finalTotalCost = 0;
+    let finalCostPerUnit = 0;
+
     setInventoryBatches(updatedBatches);
     setMaterialIssues((prev) => [newIssue, ...prev]);
     setInventoryMovements((prev) => [...newMovements, ...prev]);
     setProductionConsumptions((prev) => [...newConsumptions, ...prev]);
 
     // Automatically recalculate production order raw material cost from actual consumed batch rates
-    setProductionOrders((prevOrders) =>
-      prevOrders.map((po) => {
+    setProductionOrders((prevOrders) => {
+      const updated = prevOrders.map((po) => {
         if (po.id === issueData.productionOrderId || po.orderNumber === issueData.productionOrderNumber) {
           const updatedRMCost = (po.rawMaterialCostBDT || 0) + totalMaterialCost;
           const convCost = po.conversionCostBDT || 0;
           const totalCost = updatedRMCost + convCost;
           const costPerUnit = Math.round(totalCost / (po.plannedQty || 1));
+          finalUpdatedRMCost = updatedRMCost;
+          finalTotalCost = totalCost;
+          finalCostPerUnit = costPerUnit;
           return {
             ...po,
             rawMaterialCostBDT: updatedRMCost,
             totalProductionCostBDT: totalCost,
             costPerUnitBDT: costPerUnit,
+            materialIssued: true,
+            materialIssueNumber: issueNumber,
+            materialIssuedAt: new Date().toISOString(),
           };
         }
         return po;
-      })
-    );
+      });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('ensec_production_orders', JSON.stringify(updated));
+      }
+      return updated;
+    });
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('ensec_material_issues', JSON.stringify([newIssue, ...materialIssues]));
+      localStorage.setItem('ensec_inventory_batches', JSON.stringify(updatedBatches));
+      localStorage.setItem('ensec_inventory_movements', JSON.stringify([...newMovements, ...inventoryMovements]));
+      localStorage.setItem('ensec_production_consumptions', JSON.stringify([...newConsumptions, ...productionConsumptions]));
+    }
+
+    // Persist to Supabase database
+    const sb = getSupabase();
+    if (sb) {
+      try {
+        let whId: number | null = null;
+        // 1. Resolve warehouse from context state
+        const targetWh = warehouses.find(
+          (w) =>
+            w.id === issueData.warehouseId ||
+            w.code === issueData.warehouseId ||
+            (w.name && String(w.name).toLowerCase().includes('kushtia')) ||
+            (w.location && String(w.location).toLowerCase().includes('kushtia'))
+        );
+        if (targetWh && /^\d+$/.test(String(targetWh.id))) {
+          whId = Number(targetWh.id);
+        } else {
+          const kushtiaWh = warehouses.find(
+            (w) =>
+              String(w.name || '').toLowerCase().includes('kushtia') ||
+              String(w.location || '').toLowerCase().includes('kushtia')
+          );
+          if (kushtiaWh && /^\d+$/.test(String(kushtiaWh.id))) {
+            whId = Number(kushtiaWh.id);
+          } else if (warehouses.length > 0 && /^\d+$/.test(String(warehouses[0].id))) {
+            whId = Number(warehouses[0].id);
+          }
+        }
+
+        // 2. Query Supabase directly if warehouse ID not yet resolved
+        if (!whId) {
+          try {
+            const { data: dbWhs } = await sb.from('warehouses').select('id, name, code');
+            if (Array.isArray(dbWhs) && dbWhs.length > 0) {
+              const matched = dbWhs.find(
+                (w: any) =>
+                  String(w.code) === issueData.warehouseId ||
+                  String(w.name || '').toLowerCase().includes('kushtia') ||
+                  String(w.id) === issueData.warehouseId
+              );
+              whId = matched ? Number(matched.id) : Number(dbWhs[0].id);
+            }
+          } catch (e) {
+            console.warn('Warehouse lookup notice:', e);
+          }
+        }
+
+        // 1. Insert into material_issues table
+        const issuePayload: any = {
+          issue_number: issueNumber,
+          production_order_id: String(issueData.productionOrderId),
+          production_order_number: issueData.productionOrderNumber,
+          issue_date: issueDate,
+          warehouse_id: whId,
+          warehouse_name: issueData.warehouseName || 'Kushtia Assembly Plant',
+          issued_by: issueData.issuedBy,
+          department: 'Manufacturing & Assembly',
+          status: 'Issued',
+          total_issued_qty: totalIssuedQty,
+          total_material_cost_bdt: totalMaterialCost,
+          notes: issueData.notes || null,
+          created_at: new Date().toISOString(),
+        };
+
+        let dbIssueId: any = null;
+        let { data: insertedIssue, error: issueErr } = await sb
+          .from('material_issues')
+          .insert(issuePayload)
+          .select('id');
+
+        if (issueErr) {
+          console.warn('Supabase material_issues insert notice:', issueErr.message);
+          // If foreign key constraint failed on warehouse_id, retry with null
+          if (issueErr.code === '23503' && issuePayload.warehouse_id !== null) {
+            issuePayload.warehouse_id = null;
+            const retryRes = await sb.from('material_issues').insert(issuePayload).select('id');
+            if (!retryRes.error && retryRes.data?.[0]?.id) {
+              insertedIssue = retryRes.data;
+              issueErr = null;
+            }
+          }
+        }
+
+        if (insertedIssue && insertedIssue[0]?.id) {
+          dbIssueId = insertedIssue[0].id;
+        }
+
+        // 2. Insert line items into material_issue_items
+        if (dbIssueId && issueLineItems.length > 0) {
+          try {
+            const lineItemsPayload = issueLineItems.map((item) => {
+              let matId: number | null = null;
+              const rm = rawMaterials.find(
+                (m) =>
+                  String(m.id) === String(item.materialId) ||
+                  m.code === item.materialId ||
+                  m.code === item.materialCode ||
+                  m.name?.trim().toLowerCase() === item.materialName?.trim().toLowerCase()
+              );
+              if (rm && /^\d+$/.test(String(rm.id))) {
+                matId = Number(rm.id);
+              } else if (/^\d+$/.test(String(item.materialId))) {
+                matId = Number(item.materialId);
+              }
+
+              return {
+                issue_id: dbIssueId,
+                material_id: matId, // null if not in raw_materials to prevent foreign key violation
+                material_code: item.materialCode,
+                material_name: item.materialName,
+                batch_number: item.batchNumber,
+                batch_barcode: item.batchBarcode || `BC-${item.batchNumber}`,
+                unit: item.unit || 'Pieces',
+                requested_qty: Number(item.requestedQty) || 0,
+                issued_qty: Number(item.issuedQty) || 0,
+                unit_cost_bdt: Number(item.unitCostBDT) || 0,
+                total_material_cost_bdt: Number(item.totalMaterialCostBDT) || 0,
+                is_fifo_override: Boolean(item.isFifoOverride),
+                override_reason: item.overrideReason || null,
+              };
+            });
+
+            const { error: liErr } = await sb.from('material_issue_items').insert(lineItemsPayload);
+            if (liErr) {
+              console.warn('Supabase material_issue_items insert notice:', liErr.message);
+              if (liErr.code === '23503') {
+                // Retry with material_id: null in case any specific material ID violated FK
+                const safePayload = lineItemsPayload.map((li) => ({ ...li, material_id: null }));
+                await sb.from('material_issue_items').insert(safePayload);
+              }
+            }
+          } catch (itemErr) {
+            console.warn('Supabase material_issue_items insert notice:', itemErr);
+          }
+        }
+
+        // 3. Insert into production_consumption
+        if (newConsumptions.length > 0) {
+          try {
+            const consPayload = newConsumptions.map((c) => {
+              let matId: number | null = null;
+              const rm = rawMaterials.find(
+                (m) =>
+                  String(m.id) === String(c.materialId) ||
+                  m.code === c.materialId ||
+                  m.code === c.materialCode ||
+                  m.name?.trim().toLowerCase() === c.materialName?.trim().toLowerCase()
+              );
+              if (rm && /^\d+$/.test(String(rm.id))) {
+                matId = Number(rm.id);
+              } else if (/^\d+$/.test(String(c.materialId))) {
+                matId = Number(c.materialId);
+              }
+
+              return {
+                production_order_id: String(c.productionOrderId),
+                production_order_number: c.productionOrderNumber,
+                material_id: matId,
+                material_code: c.materialCode,
+                material_name: c.materialName,
+                batch_number: c.batchNumber,
+                batch_barcode: c.batchBarcode,
+                quantity: Number(c.quantity) || 0,
+                unit_cost_bdt: Number(c.unitCostBDT) || 0,
+                total_cost_bdt: Number(c.totalCostBDT) || 0,
+                date: c.date,
+                issued_by: c.issuedBy,
+              };
+            });
+
+            const { error: consErr } = await sb.from('production_consumption').insert(consPayload);
+            if (consErr && consErr.code === '23503') {
+              const safeCons = consPayload.map((cp) => ({ ...cp, material_id: null }));
+              await sb.from('production_consumption').insert(safeCons);
+            }
+          } catch (consErr) {
+            console.warn('Supabase production_consumption insert notice:', consErr);
+          }
+        }
+
+        // 4. Update production_orders table with updated raw material cost & total production cost
+        try {
+          const poUpdatePayload: any = {
+            raw_material_cost_bdt: finalUpdatedRMCost || totalMaterialCost,
+            total_production_cost_bdt: finalTotalCost || totalMaterialCost,
+            cost_per_unit_bdt: finalCostPerUnit || 0,
+            updated_at: new Date().toISOString(),
+          };
+          const isNumericPO = /^\d+$/.test(issueData.productionOrderId);
+          if (isNumericPO) {
+            await sb.from('production_orders').update(poUpdatePayload).eq('id', Number(issueData.productionOrderId));
+          } else {
+            await sb.from('production_orders').update(poUpdatePayload).eq('order_number', issueData.productionOrderNumber);
+          }
+        } catch (poErr) {
+          console.warn('Supabase production_orders update notice:', poErr);
+        }
+
+        // 5. Deduct raw_materials stock in database
+        for (const item of issueLineItems) {
+          try {
+            const isNumericMat = /^\d+$/.test(item.materialId);
+            const targetRm = rawMaterials.find(
+              (m) => m.id === item.materialId || m.code === item.materialId || m.code === item.materialCode
+            );
+            const newStockKushtia = Math.max(0, (targetRm?.stockKushtia || 0) - item.issuedQty);
+            const newTotalStock = Math.max(0, (targetRm?.totalAvailableStock || 0) - item.issuedQty);
+
+            if (isNumericMat) {
+              await sb.from('raw_materials').update({
+                stock_kushtia: newStockKushtia,
+                total_available_stock: newTotalStock,
+                updated_at: new Date().toISOString()
+              }).eq('id', Number(item.materialId));
+            } else if (item.materialCode) {
+              await sb.from('raw_materials').update({
+                stock_kushtia: newStockKushtia,
+                total_available_stock: newTotalStock,
+                updated_at: new Date().toISOString()
+              }).eq('code', item.materialCode);
+            }
+          } catch {}
+        }
+      } catch (dbErr: any) {
+        console.warn('Supabase material issue sync notice:', dbErr?.message || dbErr);
+      }
+
+      try {
+        await refreshMaterialIssues();
+      } catch {}
+    }
 
     addAuditLog(
       'MATERIAL_ISSUED_FOR_PRODUCTION',
@@ -13262,6 +13599,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         inventoryMovements,
         rawMaterialReceipts,
         materialIssues,
+        refreshMaterialIssues,
         productionConsumptions,
         boms,
         productionCosts,

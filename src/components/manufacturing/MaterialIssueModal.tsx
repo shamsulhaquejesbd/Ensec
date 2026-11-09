@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useERP } from '../../context/ERPContext';
 import { 
   PackageMinus, Barcode, AlertTriangle, CheckCircle2, 
-  Clock, ShieldCheck, X, Plus, Trash2, Search, Filter
+  Clock, ShieldCheck, X, Plus, Trash2, Search, Filter,
+  Loader2, Check
 } from 'lucide-react';
 import { BatchBarcodeScannerModal } from '../inventory/BatchBarcodeScannerModal';
 import { ProductionOrder, InventoryBatch, RawMaterial } from '../../types/erp';
@@ -42,6 +43,8 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   const [issuedBy, setIssuedBy] = useState('Production Supervisor');
   const [notes, setNotes] = useState(`Material issue for PO ${order.orderNumber || order.id}`);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [scannerRowId, setScannerRowId] = useState<string | null>(null);
   const [rowToDeleteId, setRowToDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -297,8 +300,9 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   const totalIssueCost = issueRows.reduce((acc, row) => acc + (row.quantity * row.unitCost), 0);
 
   // Submit issue
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (isSubmitting) return;
     setErrorMsg(null);
 
     // Validate
@@ -312,13 +316,9 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
         setErrorMsg(`Row ${i + 1}: Select a batch.`);
         return;
       }
-      if (row.quantity <= 0) {
+      const qty = Number(row.quantity);
+      if (isNaN(qty) || qty <= 0) {
         setErrorMsg(`Row ${i + 1}: Quantity must be greater than 0.`);
-        return;
-      }
-      if (row.quantity > row.maxAvailable && !allowInsufficientStock && !row.isOverride) {
-        const mat = findRawMaterial(row.materialId);
-        setErrorMsg(`Row ${i + 1} (${mat?.name || row.materialId}): Issue quantity (${row.quantity}) exceeds available stock (${row.maxAvailable} ${mat?.unit || 'units'}). Check "Authorize issue if recorded stock is zero or insufficient" or enter an override reason.`);
         return;
       }
       if (row.isOverride && !row.overrideReason.trim()) {
@@ -327,31 +327,44 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
       }
     }
 
+    const hasShortfall = issueRows.some(r => r.quantity > r.maxAvailable);
+
+    setIsSubmitting(true);
     try {
-      issueMaterialsForProduction({
+      const res = await issueMaterialsForProduction({
         productionOrderId: order.id,
-        productionOrderNumber: order.orderNumber,
+        productionOrderNumber: order.orderNumber || order.id,
         warehouseId: 'WH-KUSHTIA',
         warehouseName: 'Kushtia Assembly Plant',
-        issuedBy,
-        notes: `${notes}${issueRows.some(r => r.quantity > r.maxAvailable) ? ' [Physical issue with pending GRN reconciliation]' : ''}`,
+        issuedBy: issuedBy.trim() || 'Production Supervisor',
+        notes: `${notes || ''}${hasShortfall ? ' [Physical issue authorized with pending GRN reconciliation]' : ''}`.trim(),
         items: issueRows.map(r => {
           const { allBatches, defaultBatch } = getBatchOptionsForMaterial(r.materialId, r.quantity);
           const batch = allBatches.find(b => b.id === r.batchId) || inventoryBatches.find(b => b.id === r.batchId) || defaultBatch;
           return {
             materialId: r.materialId,
             batchNumber: batch?.batchNumber || poBatchNumber,
-            quantity: r.quantity,
+            quantity: Number(r.quantity),
             isFifoOverride: r.isOverride,
             overrideReason: r.overrideReason,
           };
         })
       });
 
-      if (onSuccess) onSuccess();
-      onClose();
+      if (res && res.success === false) {
+        setErrorMsg(res.error || 'Failed to issue materials.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      setSuccessMsg(`Material issue ${res?.issueNumber || ''} created successfully! Database updated.`);
+      setTimeout(() => {
+        if (onSuccess) onSuccess();
+        onClose();
+      }, 1000);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to issue materials.');
+      setIsSubmitting(false);
     }
   };
 
@@ -412,16 +425,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
           </div>
         )}
 
-        {/* Info Banner */}
-        <div className="p-3 bg-blue-50/80 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/60 rounded-xl text-blue-800 dark:text-blue-300 flex items-start gap-2.5 shrink-0">
-          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
-          <div className="text-xs space-y-0.5">
-            <span className="font-bold">Production Order Batch Allocation Active:</span>
-            <p className="text-slate-600 dark:text-slate-400 text-[11px]">
-              Raw material batch is automatically selected as <span className="font-mono font-bold text-purple-600 dark:text-purple-400">{poBatchNumber}</span> according to Production Order <span className="font-mono font-bold text-blue-600 dark:text-blue-400">{order.orderNumber}</span>. You can select specific purchase lots or scan physical barcodes as needed.
-            </p>
-          </div>
-        </div>
+        
 
         {/* Table of Items */}
         <div className="space-y-2.5 flex-1 min-h-0 flex flex-col">
@@ -781,21 +785,51 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
               </div>
             )}
 
+            {errorMsg && (
+              <div className="p-2.5 bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 flex items-center gap-2 text-xs mt-2">
+                <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+                <span className="font-medium">{errorMsg}</span>
+              </div>
+            )}
+
+            {successMsg && (
+              <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 rounded-xl text-emerald-700 dark:text-emerald-300 flex items-center gap-2 text-xs mt-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                <span className="font-semibold">{successMsg}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-end gap-2.5 pt-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                disabled={isSubmitting || !!successMsg}
+                className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={handleSubmit}
-                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold shadow-md shadow-amber-600/20 transition flex items-center gap-1.5 cursor-pointer"
+                onClick={() => handleSubmit()}
+                disabled={isSubmitting || !!successMsg}
+                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 disabled:opacity-70 text-white rounded-xl font-bold shadow-md shadow-amber-600/20 transition flex items-center gap-1.5 cursor-pointer"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                Confirm Material Issue
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Saving &amp; Issuing to Database...</span>
+                  </>
+                ) : successMsg ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-300" />
+                    <span>Issued Successfully!</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Confirm Material Issue</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

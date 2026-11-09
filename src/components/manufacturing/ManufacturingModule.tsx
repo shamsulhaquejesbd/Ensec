@@ -57,6 +57,9 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
     dispatchAndInvoiceSalesOrder,
     updateSalesOrder,
     receiveFinishedGoodsFromProduction,
+    materialIssues,
+    refreshMaterialIssues,
+    refreshProductionOrders,
   } = useERP();
 
   const [selectedDOForFactory, setSelectedDOForFactory] = useState<SalesOrder | null>(null);
@@ -578,67 +581,103 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
                         }
                         return true;
                       })
-                      .map((order) => (
-                      <tr key={order.id || order.orderNumber} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                        <td className="p-3">
-                          <div className="font-mono font-bold text-blue-600 dark:text-blue-400">{order.orderNumber}</div>
-                          <div className="font-mono text-[10px] text-purple-600 dark:text-purple-400 font-semibold">
-                            Batch: {order.batchNumber}
-                          </div>
-                          <div className="text-[10px] text-slate-400">{order.date || order.startDate}</div>
-                        </td>
-                        <td className="p-3">
-                          <div className="font-semibold text-slate-900 dark:text-white">{order.productName}</div>
-                          <div className="text-[10px] text-slate-500 font-mono">Model: {order.model}</div>
-                        </td>
-                        <td className="p-3">
-                          <div className="font-bold text-slate-900 dark:text-white">
-                            {order.completedQty || 0} / {order.plannedQty || 0} Units
-                          </div>
-                          <div className="text-[10px] text-slate-400">In Kushtia Plant</div>
-                        </td>
-                        <td className="p-3 font-mono">৳ {(order.rawMaterialCostBDT || 0).toLocaleString()}</td>
-                        <td className="p-3 font-mono text-purple-600 dark:text-purple-400">
-                          ৳ {(order.conversionCostBDT || 0).toLocaleString()}
-                        </td>
-                        <td className="p-3 font-mono font-bold text-slate-900 dark:text-white">
-                          ৳ {(order.costPerUnitBDT || 0).toLocaleString()}
-                        </td>
-                        <td className="p-3">
-                          <div className="text-slate-700 dark:text-slate-300">{order.wastagePercent || 0}% waste</div>
-                          <div className="text-[10px] text-slate-400">{order.scrapKg || 0} kg scrap</div>
-                        </td>
-                        <td className="p-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              order.status === 'Completed' || order.status === 'Transferred'
-                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                                : order.status === 'Cancelled'
-                                ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                                : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                            }`}
-                          >
-                            {order.status}
-                          </span>
-                          {order.status === 'Cancelled' && order.cancelReason && (
-                            <div className="text-[10px] text-rose-600 dark:text-rose-400 mt-1 max-w-[130px] truncate" title={order.cancelReason}>
-                              {order.cancelReason}
-                            </div>
-                          )}
-                        </td>
-                      <td className="p-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                          {order.status === 'In Production' && (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedOrderForIssue(order)}
-                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 font-semibold text-[11px] border border-amber-300 dark:border-amber-800 transition shadow-xs cursor-pointer"
-                              title="Issue raw materials from available batches using FIFO or authorized override"
-                            >
-                              <PackageMinus className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                              <span>Issue Raw Materials</span>
-                            </button>
-                          )}
+                      .map((order) => {
+                        const isRMIssued = Boolean(
+                          order.materialIssued ||
+                          (order.rawMaterialCostBDT && order.rawMaterialCostBDT > 0) ||
+                          materialIssues?.some(
+                            (mi) => mi.productionOrderNumber === order.orderNumber || mi.productionOrderId === String(order.id)
+                          )
+                        );
+                        const relatedIssue = materialIssues?.find(
+                          (mi) => mi.productionOrderNumber === order.orderNumber || mi.productionOrderId === String(order.id)
+                        );
+
+                        return (
+                          <tr key={order.id || order.orderNumber} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                            <td className="p-3">
+                              <div className="font-mono font-bold text-blue-600 dark:text-blue-400">{order.orderNumber}</div>
+                              <div className="font-mono text-[10px] text-purple-600 dark:text-purple-400 font-semibold">
+                                Batch: {order.batchNumber}
+                              </div>
+                              <div className="text-[10px] text-slate-400">{order.date || order.startDate}</div>
+                            </td>
+                            <td className="p-3">
+                              <div className="font-semibold text-slate-900 dark:text-white">{order.productName}</div>
+                              <div className="text-[10px] text-slate-500 font-mono">Model: {order.model}</div>
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold text-slate-900 dark:text-white">
+                                {order.completedQty || 0} / {order.plannedQty || 0} Units
+                              </div>
+                              <div className="text-[10px] text-slate-400">In Kushtia Plant</div>
+                            </td>
+                            <td className="p-3 font-mono">৳ {(order.rawMaterialCostBDT || 0).toLocaleString()}</td>
+                            <td className="p-3 font-mono text-purple-600 dark:text-purple-400">
+                              ৳ {(order.conversionCostBDT || 0).toLocaleString()}
+                            </td>
+                            <td className="p-3 font-mono font-bold text-slate-900 dark:text-white">
+                              ৳ {(order.costPerUnitBDT || 0).toLocaleString()}
+                            </td>
+                            <td className="p-3">
+                              <div className="text-slate-700 dark:text-slate-300">{order.wastagePercent || 0}% waste</div>
+                              <div className="text-[10px] text-slate-400">{order.scrapKg || 0} kg scrap</div>
+                            </td>
+                            <td className="p-3">
+                              <div className="flex flex-col gap-1 items-start">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    order.status === 'Completed' || order.status === 'Transferred'
+                                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                      : order.status === 'Cancelled'
+                                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                                      : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                  }`}
+                                >
+                                  {order.status}
+                                </span>
+                                {isRMIssued && (
+                                  <span
+                                    className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1"
+                                    title={`Raw materials issued${relatedIssue ? ` (${relatedIssue.issueNumber})` : ''}`}
+                                  >
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
+                                    <span>RM Issued {relatedIssue?.issueNumber ? `(${relatedIssue.issueNumber.slice(-3)})` : ''}</span>
+                                  </span>
+                                )}
+                                {order.status === 'Cancelled' && order.cancelReason && (
+                                  <div className="text-[10px] text-rose-600 dark:text-rose-400 max-w-[130px] truncate" title={order.cancelReason}>
+                                    {order.cancelReason}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td className="p-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                {order.status === 'In Production' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedOrderForIssue(order)}
+                                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold text-[11px] border transition shadow-xs cursor-pointer ${
+                                      isRMIssued
+                                        ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                                        : 'bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                                    }`}
+                                    title={isRMIssued ? 'Raw materials already issued. Click to view or adjust.' : 'Issue raw materials from available batches using FIFO or authorized override'}
+                                  >
+                                    {isRMIssued ? (
+                                      <>
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                                        <span>RM Issued (Edit)</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <PackageMinus className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                        <span>Issue Raw Materials</span>
+                                      </>
+                                    )}
+                                  </button>
+                                )}
 
                           {order.status !== 'Cancelled' && (
                             <button
@@ -695,8 +734,10 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
                         </div>
                       </td>
                     </tr>
-                  )))}
-                </tbody>
+                  );
+                })
+              )}
+              </tbody>
               </table>
             </div>
           </div>
@@ -1141,6 +1182,10 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
         <MaterialIssueModal
           order={selectedOrderForIssue}
           onClose={() => setSelectedOrderForIssue(null)}
+          onSuccess={() => {
+            if (refreshProductionOrders) refreshProductionOrders();
+            if (refreshMaterialIssues) refreshMaterialIssues();
+          }}
         />
       )}
 
