@@ -5648,6 +5648,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       costPerUnitBDT,
       wastagePercent,
       scrapKg,
+      materialIssued: false,
     };
 
     // Immediate optimistic local state update for zero-latency UI

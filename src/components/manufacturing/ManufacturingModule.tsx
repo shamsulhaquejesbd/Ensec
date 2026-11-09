@@ -180,6 +180,9 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
       });
 
       setShowNewBatchModal(false);
+      if (refreshProductionOrders) {
+        await refreshProductionOrders();
+      }
     } catch (err) {
       console.error('Failed to create batch:', err);
     } finally {
@@ -619,16 +622,12 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
                         return true;
                       })
                       .map((order) => {
-                        const isRMIssued = Boolean(
-                          order.materialIssued ||
-                          (order.rawMaterialCostBDT && order.rawMaterialCostBDT > 0) ||
-                          materialIssues?.some(
-                            (mi) => mi.productionOrderNumber === order.orderNumber || mi.productionOrderId === String(order.id)
-                          )
-                        );
                         const relatedIssue = materialIssues?.find(
-                          (mi) => mi.productionOrderNumber === order.orderNumber || mi.productionOrderId === String(order.id)
+                          (mi) =>
+                            (mi.productionOrderNumber && order.orderNumber && mi.productionOrderNumber === order.orderNumber) ||
+                            (mi.productionOrderId && order.id && mi.productionOrderId === String(order.id))
                         );
+                        const isRMIssued = Boolean(relatedIssue || order.materialIssued === true);
 
                         return (
                           <tr key={order.id || order.orderNumber} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">

@@ -49,7 +49,7 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
   const [rowToDeleteId, setRowToDeleteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
-  const [allowInsufficientStock, setAllowInsufficientStock] = useState<boolean>(true);
+  const [allowInsufficientStock, setAllowInsufficientStock] = useState<boolean>(false);
 
   // Derive the Production Order's official batch number (e.g. KUS-B2610-25 or PR-KUS-2026-325)
   const poBatchNumber = order.batchNumber?.trim() || `KUS-B2610-${order.orderNumber?.replace(/\D/g, '').slice(-2) || '25'}`;
@@ -327,7 +327,23 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
       }
     }
 
-    const hasShortfall = issueRows.some(r => r.quantity > r.maxAvailable);
+    const shortfallItems = issueRows.filter(r => Number(r.quantity) > Number(r.maxAvailable));
+    const hasShortfall = shortfallItems.length > 0;
+
+    if (hasShortfall && !allowInsufficientStock) {
+      const summaryNames = shortfallItems
+        .map(r => {
+          const mat = findRawMaterial(r.materialId);
+          return `${mat?.name || r.materialId} (Req: ${r.quantity}, Stock: ${r.maxAvailable})`;
+        })
+        .slice(0, 3)
+        .join(', ');
+      const extraCount = shortfallItems.length > 3 ? ` and ${shortfallItems.length - 3} more items` : '';
+      setErrorMsg(
+        `Raw Material Shortage Detected: Warehouse stock is insufficient for ${summaryNames}${extraCount}. You must check "Authorize Factory Issue with Shortfall" before confirming issue to production.`
+      );
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -769,18 +785,33 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
               </p>
             </div>
 
-            {issueRows.some(r => r.quantity > r.maxAvailable) && (
+            {issueRows.some(r => Number(r.quantity) > Number(r.maxAvailable)) && (
               <div className="pt-2">
-                <label className="flex items-start gap-2 cursor-pointer select-none text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-900/50">
+                <label className={`flex items-start gap-2.5 cursor-pointer select-none text-[11px] p-2.5 rounded-lg border transition ${
+                  allowInsufficientStock 
+                    ? 'text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800' 
+                    : 'text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/60 border-amber-300 dark:border-amber-800 shadow-xs'
+                }`}>
                   <input
                     type="checkbox"
                     checked={allowInsufficientStock}
-                    onChange={(e) => setAllowInsufficientStock(e.target.checked)}
-                    className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    onChange={(e) => {
+                      setAllowInsufficientStock(e.target.checked);
+                      if (e.target.checked) setErrorMsg(null);
+                    }}
+                    className="mt-0.5 rounded text-amber-600 focus:ring-amber-500 cursor-pointer h-4 w-4 shrink-0"
                   />
-                  <span>
-                    <b>Authorize Factory Issue with Shortfall:</b> Recorded warehouse stock is insufficient for one or more items. Issue will proceed physically for assembly and record stock variance.
-                  </span>
+                  <div>
+                    <span className="font-bold">Authorize Factory Issue with Shortfall:</span>{' '}
+                    <span>
+                      Recorded warehouse stock is insufficient for {issueRows.filter(r => Number(r.quantity) > Number(r.maxAvailable)).length} component(s). Check this box to authorize physical issue to assembly line with pending stock reconciliation.
+                    </span>
+                    {!allowInsufficientStock && (
+                      <p className="mt-1 font-semibold text-amber-700 dark:text-amber-400 text-[10px] flex items-center gap-1">
+                        ⚠️ Authorization required: Without checking this option, material issue cannot be confirmed.
+                      </p>
+                    )}
+                  </div>
                 </label>
               </div>
             )}
