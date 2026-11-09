@@ -622,11 +622,16 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
                         return true;
                       })
                       .map((order) => {
-                        const relatedIssue = materialIssues?.find(
-                          (mi) =>
-                            (mi.productionOrderNumber && order.orderNumber && mi.productionOrderNumber === order.orderNumber) ||
-                            (mi.productionOrderId && order.id && mi.productionOrderId === String(order.id))
-                        );
+                        const relatedIssue = materialIssues?.find((mi) => {
+                          if (mi.productionOrderId && order.id) {
+                            return String(mi.productionOrderId) === String(order.id);
+                          }
+                          return Boolean(
+                            mi.productionOrderNumber &&
+                            order.orderNumber &&
+                            mi.productionOrderNumber.trim().toLowerCase() === order.orderNumber.trim().toLowerCase()
+                          );
+                        });
                         const isRMIssued = Boolean(relatedIssue || order.materialIssued === true);
 
                         return (

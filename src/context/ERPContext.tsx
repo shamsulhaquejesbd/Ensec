@@ -3704,6 +3704,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             wastagePercent: Number(row.wastage_percent) || 0,
             scrapKg: Number(row.scrap_kg) || 0,
             technicianInCharge: row.shift_manager || undefined,
+            materialIssued: false,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
           }));
@@ -5601,13 +5602,15 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createProductionOrder = async (
     order: Partial<ProductionOrder> & Omit<ProductionOrder, 'id' | 'completedQty'>
   ): Promise<{ success: boolean; id?: string; error?: string }> => {
-    // 1. Calculate sequential order number (e.g. PR-KUS-2026-325, PR-KUS-2026-326)
+    // 1. Calculate sequential order number (e.g. PR-KUS-2026-325, PR-KUS-2026-326, etc.)
     let orderNumber = order.orderNumber?.trim();
     let batchNumber = order.batchNumber?.trim();
     let nextSeq = 325;
 
     if (!orderNumber || !batchNumber) {
       let maxSeq = 324;
+
+      // Scan in-memory production orders
       productionOrders.forEach((po) => {
         const match = (po.orderNumber || '').match(/PR-KUS-2026-(\d+)/i);
         if (match) {
@@ -5617,6 +5620,45 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
       });
+
+      // Scan material issues to ensure no collisions with historical issued batches
+      materialIssues.forEach((mi) => {
+        const match = (mi.productionOrderNumber || '').match(/PR-KUS-2026-(\d+)/i);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxSeq) {
+            maxSeq = num;
+          }
+        }
+      });
+
+      // Scan Supabase database directly for latest sequence
+      const sbClient = getSupabase();
+      if (sbClient) {
+        try {
+          const { data: dbOrders } = await sbClient.from('production_orders').select('order_number, batch_number');
+          if (Array.isArray(dbOrders)) {
+            dbOrders.forEach((row: any) => {
+              const match = (row.order_number || '').match(/PR-KUS-2026-(\d+)/i);
+              if (match) {
+                const num = parseInt(match[1], 10);
+                if (!isNaN(num) && num > maxSeq) maxSeq = num;
+              }
+            });
+          }
+          const { data: dbIssues } = await sbClient.from('material_issues').select('production_order_number');
+          if (Array.isArray(dbIssues)) {
+            dbIssues.forEach((row: any) => {
+              const match = (row.production_order_number || '').match(/PR-KUS-2026-(\d+)/i);
+              if (match) {
+                const num = parseInt(match[1], 10);
+                if (!isNaN(num) && num > maxSeq) maxSeq = num;
+              }
+            });
+          }
+        } catch {}
+      }
+
       nextSeq = maxSeq + 1;
       if (!orderNumber) {
         orderNumber = `PR-KUS-2026-${String(nextSeq).padStart(3, '0')}`;
