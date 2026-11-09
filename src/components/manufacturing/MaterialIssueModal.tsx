@@ -355,11 +355,18 @@ export const MaterialIssueModal: React.FC<MaterialIssueModalProps> = ({
         issuedBy: issuedBy.trim() || 'Production Supervisor',
         notes: `${notes || ''}${hasShortfall ? ' [Physical issue authorized with pending GRN reconciliation]' : ''}`.trim(),
         items: issueRows.map(r => {
+          const mat = findRawMaterial(r.materialId);
           const { allBatches, defaultBatch } = getBatchOptionsForMaterial(r.materialId, r.quantity);
           const batch = allBatches.find(b => b.id === r.batchId) || inventoryBatches.find(b => b.id === r.batchId) || defaultBatch;
           return {
-            materialId: r.materialId,
+            materialId: String(mat?.id || r.materialId),
+            materialCode: mat?.code || batch?.materialCode || '',
+            materialName: mat?.name || batch?.materialName || '',
+            unit: mat?.unit || batch?.unit || 'PCS',
+            unitCostBDT: Number(r.unitCost) || batch?.unitPurchaseRate || mat?.lastPurchaseUnitCostBDT || mat?.standardCostBDT || 0,
+            batchId: r.batchId,
             batchNumber: batch?.batchNumber || poBatchNumber,
+            batchBarcode: batch?.batchBarcode || `BC-${mat?.code || r.materialId}`,
             quantity: Number(r.quantity),
             isFifoOverride: r.isOverride,
             overrideReason: r.overrideReason,

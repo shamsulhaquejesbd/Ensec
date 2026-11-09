@@ -334,7 +334,13 @@ interface ERPContextType {
     issuedBy: string;
     items: {
       materialId: string;
+      materialCode?: string;
+      materialName?: string;
+      unit?: string;
+      unitCostBDT?: number;
+      batchId?: string;
       batchNumber: string;
+      batchBarcode?: string;
       quantity: number;
       isFifoOverride?: boolean;
       overrideReason?: string;
@@ -6048,7 +6054,13 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     issuedBy: string;
     items: {
       materialId: string;
+      materialCode?: string;
+      materialName?: string;
+      unit?: string;
+      unitCostBDT?: number;
+      batchId?: string;
       batchNumber: string;
+      batchBarcode?: string;
       quantity: number;
       isFifoOverride?: boolean;
       overrideReason?: string;
@@ -6062,28 +6074,57 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const updatedBatches = [...inventoryBatches];
 
-    // Ensure all requested batches exist or are dynamically registered for this production order
+    // Helper to check if a batch belongs to a specific material
+    const isBatchForMaterial = (b: InventoryBatch, matId: string, matCode?: string, matName?: string) => {
+      const bMatId = String(b.materialId || '').trim().toLowerCase();
+      const bMatCode = String(b.materialCode || '').trim().toLowerCase();
+      const targetId = String(matId).trim().toLowerCase();
+      const targetCode = String(matCode || '').trim().toLowerCase();
+      const targetName = String(matName || '').trim().toLowerCase();
+
+      if (bMatId && bMatId === targetId) return true;
+      if (targetCode && bMatCode && bMatCode === targetCode) return true;
+      if (bMatId && targetCode && bMatId === targetCode) return true;
+      if (bMatCode && targetId && bMatCode === targetId) return true;
+      if (targetName && b.materialName && b.materialName.trim().toLowerCase() === targetName) return true;
+      return false;
+    };
+
+    // Ensure each component has a corresponding material batch in updatedBatches
     for (const reqItem of issueData.items) {
-      let batch = updatedBatches.find(
-        (b) => b.batchNumber === reqItem.batchNumber || b.id === reqItem.batchNumber
+      const rm = rawMaterials.find(
+        (m) =>
+          String(m.id) === String(reqItem.materialId) ||
+          m.code === reqItem.materialId ||
+          (reqItem.materialCode && m.code === reqItem.materialCode) ||
+          (reqItem.materialName && m.name?.trim().toLowerCase() === reqItem.materialName.trim().toLowerCase())
       );
+      const matIdStr = String(rm?.id || reqItem.materialId);
+      const matCodeStr = rm?.code || reqItem.materialCode || 'RM';
+      const matNameStr = rm?.name || reqItem.materialName || 'Raw Material';
+      const matUnitStr = rm?.unit || reqItem.unit || 'PCS';
+      const unitRate = Number(reqItem.unitCostBDT) || rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || 0;
+
+      let batch = updatedBatches.find(
+        (b) =>
+          isBatchForMaterial(b, matIdStr, matCodeStr, matNameStr) &&
+          (b.batchNumber === reqItem.batchNumber || b.id === reqItem.batchNumber || (reqItem.batchId && b.id === reqItem.batchId))
+      );
+
       if (!batch) {
-        const rm = rawMaterials.find(
-          (m) => String(m.id) === String(reqItem.materialId) || m.code === reqItem.materialId
-        );
         const avail = Math.max(rm?.stockKushtia || 0, reqItem.quantity, 100);
         batch = {
-          id: `batch-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          id: reqItem.batchId || `batch-${Date.now()}-${Math.floor(Math.random() * 10000)}-${matCodeStr}`,
           batchNumber: reqItem.batchNumber || `KUS-B2610-${issueData.productionOrderNumber?.replace(/\D/g, '').slice(-2) || '01'}`,
-          batchBarcode: `BC-${Date.now().toString().slice(-6)}`,
-          materialId: String(rm?.id || reqItem.materialId),
-          materialCode: rm?.code || 'RM',
-          materialName: rm?.name || 'Raw Material',
-          unit: rm?.unit || 'PCS',
+          batchBarcode: reqItem.batchBarcode || `BC-${matCodeStr}-${Date.now().toString().slice(-4)}`,
+          materialId: matIdStr,
+          materialCode: matCodeStr,
+          materialName: matNameStr,
+          unit: matUnitStr,
           supplierId: 'SUP-KUSHTIA',
           supplierName: 'Kushtia Factory Store',
           purchaseDate: issueDate,
-          unitPurchaseRate: rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || 0,
+          unitPurchaseRate: unitRate,
           receivedQty: avail,
           issuedQty: 0,
           availableQty: avail,
@@ -6105,35 +6146,63 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let totalIssuedQty = 0;
 
     for (const reqItem of issueData.items) {
-      const batchIndex = updatedBatches.findIndex(
-        (b) => b.batchNumber === reqItem.batchNumber || b.id === reqItem.batchNumber
+      const rm = rawMaterials.find(
+        (m) =>
+          String(m.id) === String(reqItem.materialId) ||
+          m.code === reqItem.materialId ||
+          (reqItem.materialCode && m.code === reqItem.materialCode) ||
+          (reqItem.materialName && m.name?.trim().toLowerCase() === reqItem.materialName.trim().toLowerCase())
       );
-      const batch = updatedBatches[batchIndex];
-      const newAvail = batch.availableQty - reqItem.quantity;
-      const newIssued = batch.issuedQty + reqItem.quantity;
-      const itemCost = reqItem.quantity * batch.unitPurchaseRate;
+      const matIdStr = String(rm?.id || reqItem.materialId);
+      const matCodeStr = rm?.code || reqItem.materialCode || 'RM';
+      const matNameStr = rm?.name || reqItem.materialName || 'Raw Material';
+      const matUnitStr = rm?.unit || reqItem.unit || 'PCS';
+
+      // Find the batch strictly for this specific material
+      let batchIndex = updatedBatches.findIndex(
+        (b) =>
+          isBatchForMaterial(b, matIdStr, matCodeStr, matNameStr) &&
+          (b.batchNumber === reqItem.batchNumber || b.id === reqItem.batchNumber || (reqItem.batchId && b.id === reqItem.batchId))
+      );
+
+      // Fallback: any batch for this specific material
+      if (batchIndex === -1) {
+        batchIndex = updatedBatches.findIndex((b) => isBatchForMaterial(b, matIdStr, matCodeStr, matNameStr));
+      }
+
+      const batch = batchIndex >= 0 ? updatedBatches[batchIndex] : null;
+      const unitRate = Number(reqItem.unitCostBDT) || (batch ? batch.unitPurchaseRate : 0) || rm?.lastPurchaseUnitCostBDT || rm?.standardCostBDT || 0;
+      const itemCost = reqItem.quantity * unitRate;
       totalMaterialCost += itemCost;
       totalIssuedQty += reqItem.quantity;
 
-      updatedBatches[batchIndex] = {
-        ...batch,
-        availableQty: newAvail,
-        issuedQty: newIssued,
-        status: newAvail === 0 ? 'Depleted' : 'Active',
-        updatedAt: new Date().toISOString(),
-      };
+      const newAvail = batch ? Math.max(0, batch.availableQty - reqItem.quantity) : 0;
+      const newIssued = batch ? (batch.issuedQty + reqItem.quantity) : reqItem.quantity;
+
+      if (batch && batchIndex >= 0) {
+        updatedBatches[batchIndex] = {
+          ...batch,
+          availableQty: newAvail,
+          issuedQty: newIssued,
+          status: newAvail === 0 ? 'Depleted' : 'Active',
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      const lineBatchNumber = reqItem.batchNumber || batch?.batchNumber || `KUS-B2610-${issueData.productionOrderNumber?.replace(/\D/g, '').slice(-2) || '01'}`;
+      const lineBatchBarcode = reqItem.batchBarcode || batch?.batchBarcode || `BC-${matCodeStr}`;
 
       issueLineItems.push({
         id: `mii-${Date.now()}-${issueLineItems.length}`,
-        materialId: batch.materialId,
-        materialCode: batch.materialCode,
-        materialName: batch.materialName,
-        batchNumber: batch.batchNumber,
-        batchBarcode: batch.batchBarcode,
-        unit: batch.unit,
+        materialId: matIdStr,
+        materialCode: matCodeStr,
+        materialName: matNameStr,
+        batchNumber: lineBatchNumber,
+        batchBarcode: lineBatchBarcode,
+        unit: matUnitStr,
         requestedQty: reqItem.quantity,
         issuedQty: reqItem.quantity,
-        unitCostBDT: batch.unitPurchaseRate,
+        unitCostBDT: unitRate,
         totalMaterialCostBDT: itemCost,
         isFifoOverride: reqItem.isFifoOverride,
         overrideReason: reqItem.overrideReason,
@@ -6142,14 +6211,14 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       newMovements.push({
         id: `mov-${Date.now()}-${newMovements.length}`,
         date: issueDate,
-        materialId: batch.materialId,
-        materialCode: batch.materialCode,
-        materialName: batch.materialName,
-        batchNumber: batch.batchNumber,
-        batchBarcode: batch.batchBarcode,
+        materialId: matIdStr,
+        materialCode: matCodeStr,
+        materialName: matNameStr,
+        batchNumber: lineBatchNumber,
+        batchBarcode: lineBatchBarcode,
         movementType: 'PRODUCTION_CONSUMPTION',
         quantity: -reqItem.quantity,
-        unitCostBDT: batch.unitPurchaseRate,
+        unitCostBDT: unitRate,
         totalValueBDT: itemCost,
         referenceNo: issueData.productionOrderNumber,
         sourceWarehouseId: issueData.warehouseId,
@@ -6164,28 +6233,28 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `pcns-${Date.now()}-${newConsumptions.length}`,
         productionOrderId: issueData.productionOrderId,
         productionOrderNumber: issueData.productionOrderNumber,
-        materialId: batch.materialId,
-        materialCode: batch.materialCode,
-        materialName: batch.materialName,
-        batchNumber: batch.batchNumber,
-        batchBarcode: batch.batchBarcode,
+        materialId: matIdStr,
+        materialCode: matCodeStr,
+        materialName: matNameStr,
+        batchNumber: lineBatchNumber,
+        batchBarcode: lineBatchBarcode,
         quantity: reqItem.quantity,
-        unitCostBDT: batch.unitPurchaseRate,
+        unitCostBDT: unitRate,
         totalCostBDT: itemCost,
         date: issueDate,
         issuedBy: issueData.issuedBy,
       });
 
-      // Deduct from rawMaterials stock
+      // Deduct from rawMaterials stock for this specific raw material
       setRawMaterials((prevRms) =>
-        prevRms.map((rm) =>
-          rm.id === batch.materialId || rm.code === batch.materialCode
+        prevRms.map((r) =>
+          String(r.id) === matIdStr || r.code === matCodeStr
             ? {
-                ...rm,
-                stockKushtia: Math.max(0, (rm.stockKushtia || 0) - reqItem.quantity),
-                totalAvailableStock: Math.max(0, (rm.totalAvailableStock || 0) - reqItem.quantity),
+                ...r,
+                stockKushtia: Math.max(0, (r.stockKushtia || 0) - reqItem.quantity),
+                totalAvailableStock: Math.max(0, (r.totalAvailableStock || 0) - reqItem.quantity),
               }
-            : rm
+            : r
         )
       );
     }
