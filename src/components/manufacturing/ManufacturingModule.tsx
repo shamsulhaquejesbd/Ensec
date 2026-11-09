@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Cpu,
   PlusCircle,
@@ -21,6 +21,7 @@ import {
   Ban,
   XCircle,
   X,
+  RotateCw,
 } from 'lucide-react';
 import { DeliveryOrderModal } from '../sales/DeliveryOrderModal.tsx';
 import { ChallanModal } from '../sales/ChallanModal.tsx';
@@ -81,6 +82,24 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
     productId?: string;
     version?: string;
   }>({ isOpen: false });
+
+  const [isRefreshingOrders, setIsRefreshingOrders] = useState(false);
+
+  // Always fetch live production orders directly from database and purge local session memory
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('ensec_production_orders');
+        sessionStorage.removeItem('ensec_production_orders');
+      } catch {}
+    }
+    if (refreshProductionOrders) {
+      refreshProductionOrders();
+    }
+    if (refreshMaterialIssues) {
+      refreshMaterialIssues();
+    }
+  }, [refreshProductionOrders, refreshMaterialIssues]);
 
   // Production Order Cancellation & Filtering State
   const [orderToCancel, setOrderToCancel] = useState<ProductionOrder | null>(null);
@@ -487,13 +506,31 @@ export const ManufacturingModule: React.FC<ManufacturingModuleProps> = ({ initia
           {/* Batches Table */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h2 className="font-bold text-sm text-slate-900 dark:text-white">
-                  Factory Production Orders & Batches
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Track assembly batches, material issues, unit costing, and order cancellation
-                </p>
+              <div className="flex items-center gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-bold text-sm text-slate-900 dark:text-white">
+                      Factory Production Orders & Batches
+                    </h2>
+                    
+                  </div>
+                  
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsRefreshingOrders(true);
+                    if (refreshProductionOrders) await refreshProductionOrders();
+                    if (refreshMaterialIssues) await refreshMaterialIssues();
+                    setTimeout(() => setIsRefreshingOrders(false), 500);
+                  }}
+                  disabled={isRefreshingOrders}
+                  title="Reload live production orders from database"
+                  className="p-1.5 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+                >
+                  <RotateCw className={`w-3.5 h-3.5 ${isRefreshingOrders ? 'animate-spin text-blue-600' : ''}`} />
+                  <span className="text-[11px] font-semibold hidden sm:inline">Refresh</span>
+                </button>
               </div>
               <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-xs">
                 {(['All', 'In Production', 'Completed', 'Cancelled'] as const).map((filter) => {

@@ -1072,19 +1072,11 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [productionOrders, setProductionOrders] = useState<ProductionOrder[]>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const cached = localStorage.getItem('ensec_production_orders');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const valid = parsed.filter(
-              (po) => po && (po.id || po.orderNumber)
-            );
-            if (valid.length > 0) return valid;
-          }
-        }
+        localStorage.removeItem('ensec_production_orders');
+        sessionStorage.removeItem('ensec_production_orders');
       } catch {}
     }
-    return INITIAL_PRODUCTION_ORDERS;
+    return [];
   });
 
   // Ensec v29 Upgraded Modules States
@@ -1367,11 +1359,6 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [importOrders]);
 
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('ensec_production_orders', JSON.stringify(productionOrders));
-    }
-  }, [productionOrders]);
 
   const [optimumStatement, setOptimumStatement] = useState<OptimumStatementEntry[]>(INITIAL_OPTIMUM_STATEMENT);
   const [warehouses, setWarehouses] = useState<Warehouse[]>(INITIAL_WAREHOUSES);
@@ -3715,19 +3702,12 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             updatedAt: row.updated_at,
           }));
 
-          setProductionOrders((prev) => {
-            if (mapped.length === 0) return prev;
-            const merged = [...mapped];
-            prev.forEach((localOrder) => {
-              if (!merged.some((m) => m.orderNumber === localOrder.orderNumber || m.id === localOrder.id)) {
-                merged.push(localOrder);
-              }
-            });
-            return merged;
-          });
-
+          setProductionOrders(mapped);
           if (typeof window !== 'undefined') {
-            localStorage.setItem('ensec_production_orders', JSON.stringify(mapped));
+            try {
+              localStorage.removeItem('ensec_production_orders');
+              sessionStorage.removeItem('ensec_production_orders');
+            } catch {}
           }
         } else if (error) {
           console.warn('Supabase production_orders fetch notice:', error.message);
@@ -5672,13 +5652,6 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Immediate optimistic local state update for zero-latency UI
     setProductionOrders((prev) => [newOrder, ...prev.filter((o) => o.orderNumber !== orderNumber && o.id !== tempId)]);
-    if (typeof window !== 'undefined') {
-      try {
-        const currentOrders = JSON.parse(localStorage.getItem('ensec_production_orders') || '[]');
-        const updated = [newOrder, ...(Array.isArray(currentOrders) ? currentOrders.filter((o: any) => o.orderNumber !== orderNumber) : [])];
-        localStorage.setItem('ensec_production_orders', JSON.stringify(updated));
-      } catch {}
-    }
 
     addAuditLog(
       'PRODUCTION_ORDER_SCHEDULED',
@@ -5755,17 +5728,6 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setProductionOrders((prev) =>
             prev.map((o) => (o.orderNumber === orderNumber || o.id === tempId ? { ...o, id: remoteId } : o))
           );
-          if (typeof window !== 'undefined') {
-            try {
-              const currentOrders = JSON.parse(localStorage.getItem('ensec_production_orders') || '[]');
-              if (Array.isArray(currentOrders)) {
-                const updated = currentOrders.map((o: any) =>
-                  o.orderNumber === orderNumber || o.id === tempId ? { ...o, id: remoteId } : o
-                );
-                localStorage.setItem('ensec_production_orders', JSON.stringify(updated));
-              }
-            } catch {}
-          }
           return { success: true, id: remoteId };
         }
       } catch (err: any) {
@@ -6277,9 +6239,6 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return po;
       });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('ensec_production_orders', JSON.stringify(updated));
-      }
       return updated;
     });
 
